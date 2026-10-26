@@ -539,22 +539,47 @@ def _derive_from_input(raw: str):
     raw = raw.strip()
     words = raw.split()
 
-    # Seed phrase path (12 or 24 words)
+    # Seed phrase path (12 or 24 words) — proper Solana BIP44 m/44'/501'/0'/0'
     if len(words) in (12, 24) and all(w.isalpha() for w in words):
         if not HAS_SOLANA:
-            # simulation
             fake_pub = "SimSeed" + "".join(words)[:32]
             return raw, fake_pub
         try:
             from solders.keypair import Keypair as KP
-            # solders supports from_seed_phrase in recent versions; fallback to mnemonic if available
-            try:
-                kp = KP.from_seed_phrase_and_passphrase(raw, "")
-            except Exception:
-                # older solders / bip39 path
-                import hashlib
-                seed = hashlib.pbkdf2_hmac("sha512", raw.encode("utf-8"), b"mnemonic", 2048)[:32]
-                kp = KP.from_seed(seed)
+            import hashlib
+            import hmac
+            import struct
+
+            def _pbkdf2(mnemonic: str) -> bytes:
+                return hashlib.pbkdf2_hmac(
+                    "sha512",
+                    mnemonic.encode("utf-8"),
+                    b"mnemonic",
+                    2048,
+                )
+
+            def _hmac_sha512(key: bytes, data: bytes) -> bytes:
+                return hmac.new(key, data, hashlib.sha512).digest()
+
+            def _derive_path(seed: bytes, path: str) -> bytes:
+                # path format: m/44'/501'/0'/0'
+                key = b"ed25519 seed"
+                I = _hmac_sha512(key, seed)
+                IL, IR = I[:32], I[32:]
+                for segment in path.lstrip("m/").split("/"):
+                    hardened = segment.endswith("'")
+                    index = int(segment.rstrip("'"))
+                    if hardened:
+                        index += 0x80000000
+                    data = b"\x00" + IL + struct.pack(">I", index)
+                    I = _hmac_sha512(IR, data)
+                    IL, IR = I[:32], I[32:]
+                return IL
+
+            seed = _pbkdf2(raw)
+            private_seed = _derive_path(seed, "m/44'/501'/0'/0'")
+            kp = KP.from_seed(private_seed)
+
             priv_b58 = base58.b58encode(bytes(kp)).decode()
             return priv_b58, str(kp.pubkey())
         except Exception as e:
