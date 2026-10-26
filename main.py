@@ -81,6 +81,10 @@ class UniqueGift:
     total: Optional[int] = None  # how many can be / were upgraded
     crafted: bool = False
     burned: bool = False
+    owner_id: Optional[int] = None  # current owner when detected (the upgrader, unless it moved instantly)
+    owner_username: Optional[str] = None  # public @username, without the @
+    owner_name: Optional[str] = None  # display name (or the name Telegram shows when the owner is hidden)
+    owner_is_channel: bool = False
 
     @property
     def link(self) -> str:
@@ -198,6 +202,8 @@ ENV_SPECS: Tuple[EnvSpec, ...] = (
     EnvSpec("TELEGRAM_SESSION", "", "user", "Telethon StringSession created with generate_session.py."),
     # --- optional ---------------------------------------------------------
     EnvSpec("TELEGRAM_MESSAGE_THREAD_ID", "", "optional", "Forum topic id if TELEGRAM_CHAT_ID is a forum supergroup."),
+    EnvSpec("ADMIN_IDS", "your own id if TELEGRAM_CHAT_ID is a private chat", "optional", "Telegram user IDs (comma list) allowed to use the /settings panel."),
+    EnvSpec("PANEL_ENABLED", "true", "optional", "Enable the /settings control panel in the bot chat."),
     EnvSpec("DATABASE_PATH", "$RAILWAY_VOLUME_MOUNT_PATH/gift_parser.sqlite3 or ./data/gift_parser.sqlite3", "optional", "SQLite file path. Put it on a Railway volume."),
     EnvSpec("LOG_LEVEL", "INFO", "optional", "DEBUG, INFO, WARNING or ERROR."),
     EnvSpec("COLLECTIONS_INCLUDE", "", "optional", "Comma list of collection names to watch (empty = all)."),
@@ -254,6 +260,8 @@ class Settings:
     on_railway: bool = False
     volume_mount_path: Optional[str] = None
     log_level: str = "INFO"
+    admin_ids: Tuple[int, ...] = ()
+    panel_enabled: bool = True
     # filters
     collections_include: Tuple[str, ...] = ()
     collections_exclude: Tuple[str, ...] = ()
@@ -302,6 +310,7 @@ class Settings:
             f"{f' (topic {self.thread_id})' if self.thread_id else ''}",
             f"user session: api_id {flag(self.api_id)}, api_hash {flag(self.api_hash)}, session {flag(self.session)}",
             f"database: {self.database_path} (from {self.database_path_source})",
+            f"control panel: {'on' if self.panel_enabled and self.admin_ids else 'off'} (admins: {len(self.admin_ids)})",
             f"collections include={list(self.collections_include) or 'ALL'} exclude={list(self.collections_exclude) or 'none'} "
             f"extra={list(self.extra_collections) or 'none'}",
             f"rarity filter: max_permille={self.rarity_max_permille or 'off'} tiers={list(self.rarity_tiers) or 'off'} "
@@ -403,6 +412,17 @@ def _chat_id(raw: str) -> str:
     )
 
 
+def _admin_ids(env: Mapping[str, str], chat_id: str) -> Tuple[int, ...]:
+    ids = []
+    for item in _list(env, "ADMIN_IDS"):
+        if not re.fullmatch(r"\d+", item):
+            raise ConfigError(f"ADMIN_IDS must be numeric Telegram user IDs, got {item!r}")
+        ids.append(int(item))
+    if re.fullmatch(r"\d+", chat_id or "") and int(chat_id) not in ids:  # positive id = a private chat with you
+        ids.append(int(chat_id))
+    return tuple(ids)
+
+
 def resolve_database_path(env: Mapping[str, str]) -> Tuple[str, str]:
     explicit = _raw(env, "DATABASE_PATH")
     if explicit:
@@ -493,6 +513,8 @@ def load_settings(
         on_railway=on_railway,
         volume_mount_path=_raw(env, "RAILWAY_VOLUME_MOUNT_PATH"),
         log_level=log_level,
+        admin_ids=_admin_ids(env, chat_id),
+        panel_enabled=_bool(env, "PANEL_ENABLED", True),
         collections_include=_list(env, "COLLECTIONS_INCLUDE"),
         collections_exclude=_list(env, "COLLECTIONS_EXCLUDE"),
         extra_collections=_list(env, "EXTRA_COLLECTIONS"),
@@ -737,6 +759,23 @@ CREATE TABLE IF NOT EXISTS alerts (
     last_error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status, created_at);
+
+-- Alert rules edited from the Telegram control panel (JSON per rule).
+CREATE TABLE IF NOT EXISTS rules (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    data       TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+
+-- Trait names observed on detected gifts; they feed the panel's pick-lists.
+CREATE TABLE IF NOT EXISTS seen_traits (
+    kind      TEXT NOT NULL,      -- model | symbol | backdrop
+    coll      TEXT NOT NULL,      -- normalized collection key
+    name      TEXT NOT NULL,
+    n         INTEGER NOT NULL DEFAULT 0,
+    last_seen REAL NOT NULL,
+    PRIMARY KEY (kind, coll, name)
+);
 """
 
 T = TypeVar("T")
@@ -978,6 +1017,72 @@ class Database:
 
         return await self._run(op)
 
+    # ----------------------------------------------------------------- rules
+    async def add_rule(self, data: Dict[str, Any]) -> int:
+        def op(c: sqlite3.Connection) -> int:
+            cur = c.execute("INSERT INTO rules(data,created_at) VALUES(?,?)", (json.dumps(data), time.time()))
+            return int(cur.lastrowid)
+
+        return await self._run(op)
+
+    async def save_rule(self, rule_id: int, data: Dict[str, Any]) -> None:
+        def op(c: sqlite3.Connection) -> None:
+            c.execute("UPDATE rules SET data=? WHERE id=?", (json.dumps(data), rule_id))
+
+        await self._run(op)
+
+    async def delete_rule(self, rule_id: int) -> None:
+        def op(c: sqlite3.Connection) -> None:
+            c.execute("DELETE FROM rules WHERE id=?", (rule_id,))
+
+        await self._run(op)
+
+    async def load_rules(self) -> List[Tuple[int, Dict[str, Any]]]:
+        def op(c: sqlite3.Connection) -> List[Tuple[int, Dict[str, Any]]]:
+            return [(r["id"], json.loads(r["data"])) for r in c.execute("SELECT id, data FROM rules ORDER BY id")]
+
+        return await self._run(op)
+
+    # ---------------------------------------------------------------- traits
+    async def note_traits(self, coll: str, model: Optional[str], symbol: Optional[str], backdrop: Optional[str]) -> None:
+        now = time.time()
+        rows = [(k, coll, n, now) for k, n in (("model", model), ("symbol", symbol), ("backdrop", backdrop)) if n]
+
+        def op(c: sqlite3.Connection) -> None:
+            c.executemany(
+                "INSERT INTO seen_traits(kind,coll,name,n,last_seen) VALUES(?,?,?,1,?)"
+                " ON CONFLICT(kind,coll,name) DO UPDATE SET n=n+1, last_seen=excluded.last_seen",
+                [(k, cl, nm, ts) for k, cl, nm, ts in rows],
+            )
+
+        if rows:
+            await self._run(op)
+
+    @staticmethod
+    def _coll_clause(coll_keys: Optional[List[str]]) -> Tuple[str, List[str]]:
+        if not coll_keys:
+            return "", []
+        return " AND coll IN (" + ",".join("?" * len(coll_keys)) + ")", list(coll_keys)
+
+    async def list_traits(self, kind: str, coll_keys: Optional[List[str]], limit: int, offset: int) -> List[Tuple[str, int]]:
+        clause, args = self._coll_clause(coll_keys)
+
+        def op(c: sqlite3.Connection) -> List[Tuple[str, int]]:
+            q = (f"SELECT name, SUM(n) AS total FROM seen_traits WHERE kind=?{clause} "
+                 "GROUP BY name ORDER BY total DESC, name LIMIT ? OFFSET ?")
+            return [(r["name"], r["total"]) for r in c.execute(q, (kind, *args, limit, offset))]
+
+        return await self._run(op)
+
+    async def count_traits(self, kind: str, coll_keys: Optional[List[str]]) -> int:
+        clause, args = self._coll_clause(coll_keys)
+
+        def op(c: sqlite3.Connection) -> int:
+            q = f"SELECT COUNT(DISTINCT name) AS n FROM seen_traits WHERE kind=?{clause}"
+            return int(c.execute(q, (kind, *args)).fetchone()["n"])
+
+        return await self._run(op)
+
     # ----------------------------------------------------------- maintenance
     async def prune(self, older_than_days: float = 60.0, now: Optional[float] = None) -> int:
         cutoff = (now if now is not None else time.time()) - older_than_days * 86400
@@ -1146,8 +1251,51 @@ def first_stars_price(resell: Any) -> Optional[int]:
     return stars_amount(resell) if not isinstance(resell, int) else int(resell)
 
 
-def parse_unique(tl: Any) -> UniqueGift:
-    """Parse a ``StarGiftUnique`` into :class:`UniqueGift`."""
+def _peer(peer: Any) -> tuple:
+    """(kind, id) for a Peer object (or a bare int in older layers)."""
+    if peer is None:
+        return None, None
+    if isinstance(peer, int) and not isinstance(peer, bool):
+        return "user", peer
+    name = _cls(peer)
+    if name == "PeerUser":
+        return "user", _opt_int(getattr(peer, "user_id", None))
+    if name == "PeerChannel":
+        return "channel", _opt_int(getattr(peer, "channel_id", None))
+    if name == "PeerChat":
+        return "channel", _opt_int(getattr(peer, "chat_id", None))
+    return None, None
+
+
+def _public_username(entity: Any) -> Optional[str]:
+    uname = getattr(entity, "username", None)
+    if uname:
+        return str(uname)
+    for u in getattr(entity, "usernames", None) or []:
+        if getattr(u, "active", True) and getattr(u, "username", None):
+            return str(u.username)
+    return None
+
+
+def parse_owner(tl: Any, users: Any = None, chats: Any = None) -> dict:
+    """Owner info of a collectible. Only what Telegram actually provides; unknown stays None."""
+    kind, oid = _peer(getattr(tl, "owner_id", None))
+    out: dict = {"owner_id": oid, "owner_username": None, "owner_name": None, "owner_is_channel": kind == "channel"}
+    if oid is not None:
+        for entity in (chats if kind == "channel" else users) or []:
+            if _opt_int(getattr(entity, "id", None)) == oid:
+                out["owner_username"] = _public_username(entity)
+                full = " ".join(p for p in (getattr(entity, "first_name", None), getattr(entity, "last_name", None)) if p)
+                out["owner_name"] = full or getattr(entity, "title", None) or None
+                break
+    else:
+        hidden = getattr(tl, "owner_name", None)  # shown by Telegram when the owner chose to stay hidden
+        out["owner_name"] = str(hidden) if hidden else None
+    return out
+
+
+def parse_unique(tl: Any, users: Any = None, chats: Any = None) -> UniqueGift:
+    """Parse a ``StarGiftUnique`` into :class:`UniqueGift` (``users``/``chats`` resolve the owner)."""
     if _cls(tl) not in ("StarGiftUnique",):
         raise ValueError(f"expected StarGiftUnique, got {_cls(tl)}")
     model = symbol = backdrop = None
@@ -1179,6 +1327,7 @@ def parse_unique(tl: Any) -> UniqueGift:
         total=_opt_int(getattr(tl, "availability_total", None)),
         crafted=bool(getattr(tl, "crafted", False)),
         burned=bool(getattr(tl, "burned", False)),
+        **parse_owner(tl, users, chats),
     )
 
 
@@ -1269,6 +1418,10 @@ class SlugNotFound(SourceError):
     """STARGIFT_SLUG_INVALID: the collectible does not exist (yet)."""
 
 
+class SlugBurned(SourceError):
+    """STARGIFT_ALREADY_BURNED: the number exists but the gift was burned (cannot be resolved)."""
+
+
 def classify_exception(exc: BaseException) -> Exception:
     """Map any exception raised while calling Telegram to one of our error types.
 
@@ -1279,6 +1432,8 @@ def classify_exception(exc: BaseException) -> Exception:
     blob = blob_raw.upper()
     squashed = blob.replace("_", "").replace(" ", "")
 
+    if "STARGIFT_ALREADY_BURNED" in blob or "STARGIFTALREADYBURNED" in squashed:
+        return SlugBurned(str(exc))
     if "STARGIFT_SLUG_INVALID" in blob or "STARGIFTSLUGINVALID" in squashed:
         return SlugNotFound(str(exc))
     if "FLOODWAIT" in squashed or "FLOOD_WAIT" in blob or "SLOWMODEWAIT" in squashed:
@@ -1420,7 +1575,12 @@ class TelethonSource(GiftSource):
             result = await self._call(self._fn.payments.GetUniqueStarGiftRequest(slug=slug))
         except SlugNotFound:
             return None
-        return parse_unique(result.gift)
+        except SlugBurned:
+            # The number was used but the gift was burned: Telegram refuses to show it. Return a
+            # placeholder so the detector steps over this number instead of getting stuck on it.
+            prefix, _, num = slug.rpartition("-")
+            return UniqueGift(slug=slug, title=prefix, num=int(num), burned=True)
+        return parse_unique(result.gift, getattr(result, "users", None), getattr(result, "chats", None))
 
     def _resale_request(self, gift_id: int, limit: int, model_document_id: Optional[int] = None) -> Any:
         kwargs: dict = {"gift_id": gift_id, "offset": "", "limit": limit}
@@ -1471,17 +1631,178 @@ class TelethonSource(GiftSource):
 
 
 # ==========================================================================
+# runtime
+# ==========================================================================
+"""Rules and switches edited at runtime from the Telegram control panel.
+
+A *rule* describes gifts you want alerts for.  Every field that is set must
+match (AND); a field left empty means "any".  A gift alerts if ANY enabled rule
+matches.  With no rules at all, every upgrade alerts (subject to the filters in
+the environment variables).  Everything is stored in SQLite, so it survives
+restarts and redeploys.
+"""
+
+import logging
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+
+log_runtime = logging.getLogger("giftparser.runtime")
+
+LIST_FIELDS = ("collections", "models", "backdrops", "symbols")
+
+
+def _norm(names: List[str]) -> Set[str]:
+    return {normalize_name(n) for n in names if n}
+
+
+@dataclass
+class Rule:
+    id: int = 0
+    enabled: bool = True
+    collections: List[str] = field(default_factory=list)
+    models: List[str] = field(default_factory=list)
+    backdrops: List[str] = field(default_factory=list)
+    symbols: List[str] = field(default_factory=list)
+    max_permille: Optional[int] = None  # the rarest trait must be at or below this (per-mille)
+    min_num: Optional[int] = None
+    max_num: Optional[int] = None
+
+    def matches(self, gift: UniqueGift) -> bool:
+        if not self.enabled:
+            return False
+        if self.collections and not ({normalize_name(gift.title), normalize_name(gift.prefix)} & _norm(self.collections)):
+            return False
+        for names, trait in ((self.models, gift.model), (self.backdrops, gift.backdrop), (self.symbols, gift.symbol)):
+            if names and (trait is None or normalize_name(trait.name) not in _norm(names)):
+                return False
+        if self.max_permille is not None:
+            rarest = gift.rarest()
+            if rarest is None or rarest[1].permille > self.max_permille:
+                return False
+        if self.min_num is not None and gift.num < self.min_num:
+            return False
+        if self.max_num is not None and gift.num > self.max_num:
+            return False
+        return True
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "enabled": self.enabled, "collections": self.collections, "models": self.models,
+            "backdrops": self.backdrops, "symbols": self.symbols, "max_permille": self.max_permille,
+            "min_num": self.min_num, "max_num": self.max_num,
+        }
+
+    @classmethod
+    def from_dict(cls, rule_id: int, d: Dict[str, Any]) -> "Rule":
+        return cls(
+            id=rule_id, enabled=bool(d.get("enabled", True)),
+            collections=list(d.get("collections") or []), models=list(d.get("models") or []),
+            backdrops=list(d.get("backdrops") or []), symbols=list(d.get("symbols") or []),
+            max_permille=d.get("max_permille"), min_num=d.get("min_num"), max_num=d.get("max_num"),
+        )
+
+    def is_empty(self) -> bool:
+        return not any((self.collections, self.models, self.backdrops, self.symbols)) and self.max_permille is None \
+            and self.min_num is None and self.max_num is None
+
+    def short(self) -> str:
+        """One-line label for lists."""
+        bits = []
+        if self.collections:
+            bits.append("/".join(self.collections[:2]) + ("…" if len(self.collections) > 2 else ""))
+        for label, names in (("model", self.models), ("bg", self.backdrops), ("sym", self.symbols)):
+            if names:
+                bits.append(f"{label}:" + "/".join(names[:2]) + ("…" if len(names) > 2 else ""))
+        if self.max_permille is not None:
+            bits.append(f"≤{self.max_permille / 10:g}%")
+        if self.min_num is not None or self.max_num is not None:
+            bits.append(f"#{self.min_num or 1}–{self.max_num or '∞'}")
+        return " · ".join(bits) or "everything"
+
+
+class Runtime:
+    """In-memory view of the panel settings, persisted through the database."""
+
+    FLAGS = ("paused", "alert_new_gifts", "floor_enabled")
+
+    def __init__(self, settings: Settings, db: Database) -> None:
+        self.db = db
+        self.rules: Dict[int, Rule] = {}
+        self.paused = False
+        self.alert_new_gifts = settings.alert_new_gifts
+        self.floor_enabled = settings.floor_enabled
+
+    async def load(self) -> None:
+        self.rules = {rid: Rule.from_dict(rid, data) for rid, data in await self.db.load_rules()}
+        for name in self.FLAGS:
+            value = await self.db.get_meta(f"rt_{name}")
+            if value is not None:
+                setattr(self, name, value == "1")
+        log_runtime.info("Control panel settings loaded: %d rule(s), paused=%s", len(self.rules), self.paused)
+
+    async def set_flag(self, name: str, value: bool) -> None:
+        if name not in self.FLAGS:
+            raise ValueError(name)
+        setattr(self, name, value)
+        await self.db.set_meta(f"rt_{name}", "1" if value else "0")
+
+    async def create_rule(self) -> Rule:
+        rule = Rule()
+        rule.id = await self.db.add_rule(rule.to_dict())
+        self.rules[rule.id] = rule
+        return rule
+
+    async def save_rule(self, rule: Rule) -> None:
+        await self.db.save_rule(rule.id, rule.to_dict())
+        self.rules[rule.id] = rule
+
+    async def delete_rule(self, rule_id: int) -> None:
+        await self.db.delete_rule(rule_id)
+        self.rules.pop(rule_id, None)
+
+    def active_rules(self) -> List[Rule]:
+        return [r for r in self.rules.values() if r.enabled]
+
+    def evaluate(self, gift: UniqueGift) -> Tuple[bool, str]:
+        if self.paused:
+            return False, "alerts paused"
+        if not self.rules:
+            return True, ""
+        active = self.active_rules()
+        if not active:
+            return False, "all rules switched off"
+        if any(r.matches(gift) for r in active):
+            return True, ""
+        return False, "no rule matched"
+
+    def polled_collections(self) -> Optional[Set[str]]:
+        """Normalized collections that need probing, or None for 'all of them'."""
+        if not self.rules:
+            return None
+        active = self.active_rules()
+        if any(not r.collections for r in active):
+            return None
+        return {normalize_name(c) for r in active for c in r.collections}
+
+    def should_poll(self, *names: str) -> bool:
+        wanted = self.polled_collections()
+        return wanted is None or bool(wanted & {normalize_name(n) for n in names if n})
+
+
+# ==========================================================================
 # filters
 # ==========================================================================
 """Collection / rarity / number filters."""
 
-from typing import Iterable, Tuple
+from typing import Iterable, Optional, Tuple
 
 
 
 class GiftFilter:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, runtime: Optional[Runtime] = None) -> None:
         self.s = settings
+        self.runtime = runtime
         self._include = {normalize_name(x) for x in settings.collections_include}
         self._exclude = {normalize_name(x) for x in settings.collections_exclude}
         self._extra = {normalize_name(x) for x in settings.extra_collections}
@@ -1500,6 +1821,18 @@ class GiftFilter:
             return bool(norm & self._include) or bool(norm & self._extra)
         return True
 
+    @property
+    def paused(self) -> bool:
+        return bool(self.runtime and self.runtime.paused)
+
+    @property
+    def alert_new_gifts(self) -> bool:
+        return self.runtime.alert_new_gifts if self.runtime else self.s.alert_new_gifts
+
+    def should_poll(self, *names: str) -> bool:
+        """False for collections no enabled panel rule cares about (saves requests)."""
+        return self.runtime.should_poll(*names) if self.runtime else True
+
     def evaluate(self, gift: UniqueGift) -> Tuple[bool, str]:
         """Return (passes, reason). ``reason`` explains a rejection."""
         if not self.collection_allowed(gift.title, gift.prefix):
@@ -1510,6 +1843,8 @@ class GiftFilter:
             return False, f"number {gift.num} > MAX_GIFT_NUMBER"
         if self.s.rarity_filter_active and not self._rarity_ok(gift, self.s.rarity_attributes):
             return False, "rarity filter"
+        if self.runtime is not None:
+            return self.runtime.evaluate(gift)
         return True, ""
 
     def _rarity_ok(self, gift: UniqueGift, attrs: Iterable[str]) -> bool:
@@ -1553,6 +1888,19 @@ def _stars(n: int) -> str:
     return f"{n:,} ★"
 
 
+def format_owner(gift: UniqueGift) -> Optional[str]:
+    """'Upgraded by' line: @username if public, else a name/ID link, else nothing."""
+    if gift.owner_username:
+        kind = " (channel)" if gift.owner_is_channel else ""
+        return f'Upgraded by: <a href="https://t.me/{esc(gift.owner_username)}">@{esc(gift.owner_username)}</a>{kind}'
+    if gift.owner_id and not gift.owner_is_channel:
+        label = esc(gift.owner_name or "user")
+        return f'Upgraded by: <a href="tg://user?id={gift.owner_id}">{label}</a> (no public @username)'
+    if gift.owner_name:
+        return f"Upgraded by: {esc(gift.owner_name)} (owner hidden)"
+    return None
+
+
 def format_floor(floor: Optional[Floor]) -> Optional[str]:
     if floor is None or not floor.has_data:
         return None
@@ -1582,6 +1930,9 @@ def format_upgrade_alert(gift: UniqueGift, floor: Optional[Floor] = None, *, tes
     lines.append(coll)
     if gift.unique_id:
         lines.append(f"Gift ID: <code>{gift.unique_id}</code>")
+    owner = format_owner(gift)
+    if owner:
+        lines.append(owner)
     for label, trait in (("Model", gift.model), ("Backdrop", gift.backdrop), ("Symbol", gift.symbol)):
         line = _trait_line(label, trait)
         if line:
@@ -1766,6 +2117,46 @@ class BotApiClient:
     async def get_chat(self) -> Dict[str, Any]:
         return await self._call("getChat", {"chat_id": self.chat_id})
 
+    # ----- helpers used by the control panel
+    async def get_updates(self, offset: int, timeout: int = 10) -> list:
+        return await self._call(
+            "getUpdates", {"offset": offset, "timeout": timeout, "allowed_updates": ["message", "callback_query"]}
+        ) or []
+
+    async def send_to(self, chat_id: Any, text: str, reply_markup: Optional[dict] = None) -> int:
+        payload: Dict[str, Any] = {
+            "chat_id": chat_id, "text": text, "parse_mode": "HTML", "link_preview_options": {"is_disabled": True},
+        }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        return int((await self._call("sendMessage", payload))["message_id"])
+
+    async def edit_message(self, chat_id: Any, message_id: int, text: str, reply_markup: Optional[dict] = None) -> None:
+        payload: Dict[str, Any] = {
+            "chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "HTML",
+            "link_preview_options": {"is_disabled": True},
+        }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        try:
+            await self._call("editMessageText", payload)
+        except BotApiError as exc:
+            if "not modified" not in str(exc).lower():
+                raise
+
+    async def answer_callback(self, callback_id: str, text: Optional[str] = None, alert: bool = False) -> None:
+        payload: Dict[str, Any] = {"callback_query_id": callback_id}
+        if text:
+            payload["text"] = text
+            payload["show_alert"] = alert
+        try:
+            await self._call("answerCallbackQuery", payload)
+        except BotApiError as exc:
+            log_bot_api.debug("answerCallbackQuery failed: %s", exc)
+
+    async def call(self, method: str, payload: Optional[Dict[str, Any]] = None) -> Any:
+        return await self._call(method, payload or {})
+
     async def send_message(self, text: str, *, link_preview_url: Optional[str] = None) -> int:
         """Send an HTML message; returns the message id.
 
@@ -1894,15 +2285,17 @@ class AlertItem:
 class FloorProvider:
     """Floor prices from Telegram's own resale market, cached and time-boxed."""
 
-    def __init__(self, source: GiftSource, settings: Settings) -> None:
+    def __init__(self, source: GiftSource, settings: Settings, runtime: Any = None) -> None:
         self._source = source
-        self._enabled = settings.floor_enabled
+        self._settings_enabled = settings.floor_enabled
+        self._runtime = runtime
         self._ttl = settings.floor_cache_seconds
         self._timeout = settings.floor_timeout
         self._cache: Dict[Tuple[int, Optional[int]], Tuple[float, Floor]] = {}
 
     async def get(self, gift: UniqueGift) -> Optional[Floor]:
-        if not self._enabled or gift.gift_id is None:
+        enabled = self._runtime.floor_enabled if self._runtime is not None else self._settings_enabled
+        if not enabled or gift.gift_id is None:
             return None
         key = (gift.gift_id, gift.model_document_id)
         hit = self._cache.get(key)
@@ -2302,6 +2695,14 @@ class UpgradeDetector:
         await self._sleep(random.uniform(0, min(self.s.cold_interval, 10.0)))
         failures = 0
         while not self._stop.is_set():
+            if not self.filter.should_poll(st.title, st.prefix, st.key):
+                # No enabled panel rule needs this collection: stop probing it. It re-baselines
+                # silently when a rule wants it again, so old gifts never alert.
+                if st.bootstrapped:
+                    st.bootstrapped = False
+                    await self.db.update_collection(st.key, bootstrapped=0)
+                await self._sleep(3.0)
+                continue
             try:
                 if not st.bootstrapped:
                     await self.bootstrap(st)
@@ -2390,6 +2791,13 @@ class UpgradeDetector:
             log_detector.debug("Already seen %s; not alerting again", gift.slug)
             return
         self.stats.detections += 1
+        try:  # feeds the panel's pick-lists; must never break detection
+            await self.db.note_traits(
+                st.key, gift.model.name if gift.model else None,
+                gift.symbol.name if gift.symbol else None, gift.backdrop.name if gift.backdrop else None,
+            )
+        except Exception as exc:  # pragma: no cover
+            log_detector.debug("could not record traits: %s", exc)
         traits = " / ".join(
             f"{k}={t.name}" for k, t in gift.traits().items() if t is not None and t.name
         )
@@ -2510,6 +2918,10 @@ class UpgradeDetector:
                 "SLUG_PREFIX_OVERRIDES). Watching for #1.", st.title, st.prefix,
             )
             return
+        if anchor.issued is None:  # e.g. #1 was burned: no counters, so ask the resale market for some
+            sample = await self._resale_sample(st)
+            if sample is not None and sample.issued:
+                anchor = sample
         base = max(anchor.issued or 0, anchor.num, 1)
         if anchor.gift_id and not st.gift_id:
             st.gift_id = anchor.gift_id
@@ -2628,7 +3040,7 @@ class CatalogWatcher:
             if title and (g.upgradable or g.availability_resale or g.sold_out):
                 await self.detector.add_collection(title, gift_id=g.gift_id)
 
-            if event and baselined and self.s.alert_new_gifts and self._wanted(g):
+            if event and baselined and self.filter.alert_new_gifts and not self.filter.paused and self._wanted(g):
                 if await self.dispatcher.enqueue_catalog(g, event):
                     alerts += 1
                     log_catalog.info("Catalog event %r for %s (id %d)", event, g.title, g.gift_id)
@@ -2669,6 +3081,447 @@ class CatalogWatcher:
                 await asyncio.wait_for(self._stop.wait(), timeout=delay)
             except asyncio.TimeoutError:
                 pass
+
+
+# ==========================================================================
+# panel
+# ==========================================================================
+"""Telegram control panel: change what you get alerts for, from the bot chat.
+
+Open your bot and send /settings.  Everything is done with buttons (plus an
+optional "type it" mode), and is stored in SQLite so it survives redeploys.
+
+How it receives your taps: the Bot API's getUpdates long-polling, so no web
+server or webhook is needed.  Only the Telegram user IDs in ADMIN_IDS may use
+it; everyone else is ignored.
+
+Model: a *rule* = collections + models + backdrops + symbols + rarity limit +
+number range.  A gift alerts if any enabled rule matches; with no rules every
+upgrade alerts.
+"""
+
+import asyncio
+import logging
+import re
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
+
+log_panel = logging.getLogger("giftparser.panel")
+
+PAGE = 8
+# field code -> (label, Rule attribute, trait kind in seen_traits or None)
+FIELDS: Dict[str, Tuple[str, str, Optional[str]]] = {
+    "c": ("Collections", "collections", None),
+    "m": ("Models", "models", "model"),
+    "b": ("Backdrops", "backdrops", "backdrop"),
+    "s": ("Symbols", "symbols", "symbol"),
+    "r": ("Rarity", "max_permille", None),
+    "n": ("Min number", "min_num", None),
+    "x": ("Max number", "max_num", None),
+}
+LIST_CODES = ("c", "m", "b", "s")
+RARITY_PRESETS = (5, 10, 20, 50, 100)  # per-mille => 0.5%, 1%, 2%, 5%, 10%
+
+View = Tuple[str, dict]
+
+
+def kb(rows: List[List[Tuple[str, str]]]) -> dict:
+    return {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row if len(d.encode()) <= 64] for row in rows]}
+
+
+def onoff(value: bool) -> str:
+    return "ON" if value else "OFF"
+
+
+class ControlPanel:
+    def __init__(
+        self,
+        settings: Settings,
+        bot: BotApiClient,
+        db: Database,
+        runtime: Runtime,
+        detector: UpgradeDetector,
+        stats: Stats,
+    ) -> None:
+        self.s = settings
+        self.bot = bot
+        self.db = db
+        self.rt = runtime
+        self.detector = detector
+        self.stats = stats
+        self.admins = set(settings.admin_ids)
+        self._awaiting: Dict[int, Tuple[int, str]] = {}
+        self._offset = 0
+        self._stop = asyncio.Event()
+
+    def request_stop(self) -> None:
+        self._stop.set()
+
+    # --------------------------------------------------------------- polling
+    async def run(self) -> None:
+        if not self.admins:
+            log_panel.warning("Control panel disabled: no admin. Set ADMIN_IDS (your Telegram user id).")
+            return
+        log_panel.info("Control panel running. Admins: %d. Send /settings to the bot.", len(self.admins))
+        await self._setup()
+        failures = 0
+        while not self._stop.is_set():
+            try:
+                updates = await self.bot.get_updates(self._offset, timeout=10)
+                failures = 0
+            except BotApiAuthError:
+                raise
+            except BotApiError as exc:
+                failures += 1
+                if failures == 1 or failures % 10 == 0:
+                    log_panel.warning("Panel could not fetch updates: %s (another copy of the bot running? attempt %d)", exc, failures)
+                await asyncio.sleep(min(30, 2 * failures))
+                continue
+            for update in updates:
+                if not isinstance(update, dict):
+                    continue
+                self._offset = max(self._offset, int(update.get("update_id", 0)) + 1)
+                try:
+                    await self.handle_update(update)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    log_panel.exception("Panel failed to handle an update")
+
+    async def _setup(self) -> None:
+        for method, payload in (
+            ("deleteWebhook", {"drop_pending_updates": False}),  # a webhook would block getUpdates
+            ("setMyCommands", {"commands": [
+                {"command": "settings", "description": "Open the alert settings panel"},
+                {"command": "status", "description": "Show bot status"},
+            ]}),
+        ):
+            try:
+                await self.bot.call(method, payload)
+            except BotApiError as exc:
+                log_panel.debug("%s failed: %s", method, exc)
+
+    # --------------------------------------------------------------- updates
+    async def handle_update(self, update: Dict[str, Any]) -> None:
+        if update.get("callback_query"):
+            await self._on_callback(update["callback_query"])
+        elif update.get("message"):
+            await self._on_message(update["message"])
+
+    async def _on_message(self, msg: Dict[str, Any]) -> None:
+        uid = int((msg.get("from") or {}).get("id", 0))
+        chat_id = msg["chat"]["id"]
+        text = (msg.get("text") or "").strip()
+        if uid not in self.admins:
+            if text.startswith("/start"):
+                await self.bot.send_to(chat_id, "This is a private gift-alert bot. Its settings are restricted to its owner.")
+            return
+        command = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
+        if command == "/cancel":
+            self._awaiting.pop(uid, None)
+            await self.bot.send_to(chat_id, "Cancelled.")
+        elif command in ("/start", "/settings", "/panel", "/menu"):
+            self._awaiting.pop(uid, None)
+            await self._send_view(chat_id, await self.view_home())
+        elif command == "/status":
+            await self._send_view(chat_id, await self.view_status())
+        elif command == "/rules":
+            await self._send_view(chat_id, await self.view_rules())
+        elif command:
+            await self.bot.send_to(chat_id, "Unknown command. Try /settings.")
+        elif uid in self._awaiting and text:
+            await self._apply_text(uid, chat_id, text)
+        else:
+            await self.bot.send_to(chat_id, "Send /settings to open the panel.")
+
+    async def _send_view(self, chat_id: Any, view: View) -> None:
+        await self.bot.send_to(chat_id, view[0], view[1])
+
+    async def _on_callback(self, cb: Dict[str, Any]) -> None:
+        uid = int((cb.get("from") or {}).get("id", 0))
+        cb_id = cb["id"]
+        if uid not in self.admins:
+            await self.bot.answer_callback(cb_id, "Not allowed", alert=True)
+            return
+        message = cb.get("message") or {}
+        chat_id = (message.get("chat") or {}).get("id")
+        message_id = message.get("message_id")
+        data = cb.get("data") or ""
+        if chat_id is None or message_id is None:
+            await self.bot.answer_callback(cb_id)
+            return
+        try:
+            view, toast = await self._route(uid, data)
+        except Exception:
+            log_panel.exception("Panel action %r failed", data)
+            await self.bot.answer_callback(cb_id, "Something went wrong, see logs", alert=True)
+            return
+        await self.bot.answer_callback(cb_id, toast)
+        if view is not None:
+            await self.bot.edit_message(chat_id, message_id, view[0], view[1])
+
+    # --------------------------------------------------------------- routing
+    async def _route(self, uid: int, data: str) -> Tuple[Optional[View], Optional[str]]:
+        parts = data.split(":", 4)
+        action = parts[0]
+        if action != "rx":
+            self._awaiting.pop(uid, None)
+
+        if action in ("home", "noop"):
+            return (await self.view_home(), None) if action == "home" else (None, None)
+        if action == "status":
+            return await self.view_status(), None
+        if action == "rules":
+            return await self.view_rules(), None
+        if action == "flag":  # flag:<name>
+            name = parts[1]
+            await self.rt.set_flag(name, not getattr(self.rt, name))
+            return await self.view_home(), f"{name.replace('_', ' ')}: {onoff(getattr(self.rt, name))}"
+        if action == "rnew":
+            rule = await self.rt.create_rule()
+            return await self.view_rule(rule.id), f"Rule #{rule.id} created"
+
+        rid = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+        rule = self.rt.rules.get(rid)
+        if rule is None:
+            return await self.view_rules(), "That rule no longer exists"
+
+        if action == "r":
+            return await self.view_rule(rid), None
+        if action == "rt":
+            rule.enabled = not rule.enabled
+            await self.rt.save_rule(rule)
+            return await self.view_rule(rid), f"Rule {onoff(rule.enabled)}"
+        if action == "rd":
+            return (f"Delete <b>rule #{rid}</b>?\n{esc(rule.short())}",
+                    kb([[("🗑 Yes, delete", f"rdc:{rid}"), ("Cancel", f"r:{rid}")]])), None
+        if action == "rdc":
+            await self.rt.delete_rule(rid)
+            return await self.view_rules(), "Deleted"
+
+        code = parts[2] if len(parts) > 2 else ""
+        if code not in FIELDS:
+            return await self.view_rule(rid), None
+        attr = FIELDS[code][1]
+        if action == "rf":
+            return await self.view_field(rid, code), None
+        if action == "rp":
+            return await self.view_pick(rid, code, int(parts[3]) if len(parts) > 3 else 0), None
+        if action == "ri":  # toggle one item in a list field
+            page, name = int(parts[3]), parts[4]
+            current: List[str] = list(getattr(rule, attr))
+            match = [c for c in current if normalize_name(c) == normalize_name(name)]
+            if match:
+                current.remove(match[0])
+            else:
+                current.append(name)
+            setattr(rule, attr, current)
+            await self.rt.save_rule(rule)
+            return await self.view_pick(rid, code, page), None
+        if action == "rc":
+            setattr(rule, attr, [] if code in LIST_CODES else None)
+            await self.rt.save_rule(rule)
+            return await self.view_rule(rid), "Cleared"
+        if action == "rs":  # rarity preset
+            rule.max_permille = int(parts[3])
+            await self.rt.save_rule(rule)
+            return await self.view_rule(rid), f"Rarity ≤ {rule.max_permille / 10:g}%"
+        if action == "rx":  # switch to typing mode
+            self._awaiting[uid] = (rid, code)
+            hints = {
+                "r": "Send the rarity limit in percent, e.g. 2 (= rarest trait at most 2%).",
+                "n": "Send the minimum gift number, e.g. 1.",
+                "x": "Send the maximum gift number, e.g. 1000.",
+            }
+            hint = hints.get(code, "Send the names separated by commas, e.g. Onyx Black, Black.")
+            return (f"⌨️ <b>{FIELDS[code][0]}</b> for rule #{rid}\n{hint}\n\nSend /cancel to stop.",
+                    kb([[("⬅ Back", f"rf:{rid}:{code}")]])), None
+        return await self.view_rule(rid), None
+
+    # ----------------------------------------------------------------- typing
+    async def _apply_text(self, uid: int, chat_id: Any, text: str) -> None:
+        rid, code = self._awaiting.pop(uid)
+        rule = self.rt.rules.get(rid)
+        if rule is None:
+            await self.bot.send_to(chat_id, "That rule no longer exists. Send /settings.")
+            return
+        attr = FIELDS[code][1]
+        note = ""
+        if code in LIST_CODES:
+            names = [p.strip() for p in re.split(r"[,\n;]", text) if p.strip()]
+            if code == "c":
+                known = {normalize_name(st.title): st.title for st in self.detector.collections.values()}
+                fixed = [known.get(normalize_name(n), n) for n in names]
+                unknown = [n for n in names if normalize_name(n) not in known]
+                if unknown:
+                    note = "\n⚠️ Not a known collection (saved anyway): " + esc(", ".join(unknown))
+                names = fixed
+            setattr(rule, attr, names)
+        elif code == "r":
+            m = re.fullmatch(r"\s*(\d+(?:[.,]\d+)?)\s*%?\s*", text)
+            pct = float(m.group(1).replace(",", ".")) if m else -1
+            if not 0 < pct <= 100:
+                self._awaiting[uid] = (rid, code)
+                await self.bot.send_to(chat_id, "I need a percentage between 0 and 100, e.g. 2. Try again or /cancel.")
+                return
+            rule.max_permille = max(1, int(round(pct * 10)))
+        else:
+            if not re.fullmatch(r"\s*\d{1,9}\s*", text):
+                self._awaiting[uid] = (rid, code)
+                await self.bot.send_to(chat_id, "I need a whole number, e.g. 1000. Try again or /cancel.")
+                return
+            setattr(rule, attr, int(text))
+        await self.rt.save_rule(rule)
+        text_view, markup = await self.view_rule(rid)
+        await self.bot.send_to(chat_id, "✅ Saved." + note + "\n\n" + text_view, markup)
+
+    # ----------------------------------------------------------------- views
+    async def view_home(self) -> View:
+        rules = list(self.rt.rules.values())
+        active = [r for r in rules if r.enabled]
+        if not rules:
+            rule_line = "No rules yet → you get alerts for <b>every</b> upgrade."
+        else:
+            rule_line = f"{len(active)} of {len(rules)} rule(s) on → alerts only for matching gifts."
+        polled = self.rt.polled_collections()
+        scope = "all collections" if polled is None else f"{len(polled)} collection(s) (the rest are not scanned)"
+        text = (
+            "<b>⚙️ Gift alert settings</b>\n"
+            f"Alerts: <b>{'⏸ PAUSED' if self.rt.paused else '▶ ACTIVE'}</b>\n"
+            f"{rule_line}\nScanning: {scope}"
+        )
+        rows = [
+            [("▶ Resume alerts" if self.rt.paused else "⏸ Pause alerts", "flag:paused")],
+            [(f"📋 Rules ({len(rules)})", "rules"), ("➕ New rule", "rnew")],
+            [(f"🆕 New-gift alerts: {onoff(self.rt.alert_new_gifts)}", "flag:alert_new_gifts")],
+            [(f"💰 Floor prices: {onoff(self.rt.floor_enabled)}", "flag:floor_enabled")],
+            [("📊 Status", "status")],
+        ]
+        return text, kb(rows)
+
+    async def view_rules(self) -> View:
+        rules = sorted(self.rt.rules.values(), key=lambda r: r.id)
+        if not rules:
+            return ("<b>📋 Rules</b>\nNo rules yet. Without rules you get every upgrade.",
+                    kb([[("➕ New rule", "rnew")], [("⬅ Back", "home")]]))
+        lines = ["<b>📋 Rules</b> (a gift alerts if <i>any</i> ON rule matches)"]
+        rows: List[List[Tuple[str, str]]] = []
+        for r in rules:
+            lines.append(f"{'✅' if r.enabled else '⏹'} #{r.id}: {esc(r.short())}")
+            rows.append([(f"{'✅' if r.enabled else '⏹'} #{r.id} {r.short()}"[:40], f"r:{r.id}")])
+        rows.append([("➕ New rule", "rnew"), ("⬅ Back", "home")])
+        return "\n".join(lines), kb(rows)
+
+    async def view_rule(self, rid: int) -> View:
+        r = self.rt.rules[rid]
+
+        def lst(names: List[str]) -> str:
+            return esc(", ".join(names)) if names else "any"
+
+        number = "any" if r.min_num is None and r.max_num is None else f"#{r.min_num or 1} – {('#' + str(r.max_num)) if r.max_num else 'no limit'}"
+        text = (
+            f"<b>Rule #{rid}</b> {'✅ ON' if r.enabled else '⏹ OFF'}\n"
+            f"Collections: <b>{lst(r.collections)}</b>\n"
+            f"Models: <b>{lst(r.models)}</b>\n"
+            f"Backdrops: <b>{lst(r.backdrops)}</b>\n"
+            f"Symbols: <b>{lst(r.symbols)}</b>\n"
+            f"Rarity: <b>{'rarest trait ≤ ' + format(r.max_permille / 10, 'g') + '%' if r.max_permille is not None else 'any'}</b>\n"
+            f"Number: <b>{number}</b>\n\n"
+            "A gift must match <i>every</i> field that is set (empty = any)."
+        )
+        if r.is_empty():
+            text += "\n⚠️ This rule is empty, so it matches every gift."
+        rows = [
+            [("Collections", f"rf:{rid}:c"), ("Models", f"rf:{rid}:m")],
+            [("Backdrops", f"rf:{rid}:b"), ("Symbols", f"rf:{rid}:s")],
+            [("Rarity", f"rf:{rid}:r"), ("Min #", f"rf:{rid}:n"), ("Max #", f"rf:{rid}:x")],
+            [("⏹ Turn off" if r.enabled else "✅ Turn on", f"rt:{rid}"), ("🗑 Delete", f"rd:{rid}")],
+            [("⬅ Rules", "rules")],
+        ]
+        return text, kb(rows)
+
+    async def view_field(self, rid: int, code: str) -> View:
+        r = self.rt.rules[rid]
+        label, attr, _kind = FIELDS[code]
+        value = getattr(r, attr)
+        if code in LIST_CODES:
+            shown = esc(", ".join(value)) if value else "any"
+            rows = [[("📋 Pick from list", f"rp:{rid}:{code}:0"), ("⌨️ Type names", f"rx:{rid}:{code}")],
+                    [("🧹 Clear (any)", f"rc:{rid}:{code}"), ("⬅ Back", f"r:{rid}")]]
+        elif code == "r":
+            shown = f"rarest trait ≤ {value / 10:g}%" if value is not None else "any"
+            rows = [[(f"≤{p / 10:g}%", f"rs:{rid}:r:{p}") for p in RARITY_PRESETS],
+                    [("⌨️ Type percent", f"rx:{rid}:r"), ("🧹 Clear", f"rc:{rid}:r")],
+                    [("⬅ Back", f"r:{rid}")]]
+        else:
+            shown = f"#{value}" if value is not None else "any"
+            rows = [[("⌨️ Type number", f"rx:{rid}:{code}"), ("🧹 Clear", f"rc:{rid}:{code}")], [("⬅ Back", f"r:{rid}")]]
+        return f"<b>Rule #{rid} · {label}</b>\nCurrent: <b>{shown}</b>", kb(rows)
+
+    async def _pick_items(self, rule: Rule, code: str, page: int) -> Tuple[List[str], int, str]:
+        """Names on this page, total count, and a hint if the list is short/empty."""
+        if code == "c":
+            names = sorted({st.title for st in self.detector.collections.values()}, key=str.lower)
+            return names[page * PAGE:(page + 1) * PAGE], len(names), ""
+        kind = FIELDS[code][2] or ""
+        keys = [normalize_name(c) for c in rule.collections] if code in ("m", "s") and rule.collections else None
+        total = await self.db.count_traits(kind, keys)
+        items = await self.db.list_traits(kind, keys, PAGE, page * PAGE)
+        hint = ""
+        if total == 0:
+            hint = ("\nNo names seen yet: the list fills up as the bot detects upgrades. "
+                    "Use <b>Type names</b> in the meantime.")
+        elif code in ("m", "s") and not rule.collections:
+            hint = "\nTip: set a collection first to see only its names."
+        return [n for n, _c in items], total, hint
+
+    async def view_pick(self, rid: int, code: str, page: int) -> View:
+        r = self.rt.rules[rid]
+        label, attr, _kind = FIELDS[code]
+        page = max(0, page)
+        names, total, hint = await self._pick_items(r, code, page)
+        pages = max(1, -(-total // PAGE))
+        if page >= pages:
+            page = pages - 1
+            names, total, hint = await self._pick_items(r, code, page)
+        chosen = {normalize_name(x) for x in getattr(r, attr)}
+        rows: List[List[Tuple[str, str]]] = []
+        row: List[Tuple[str, str]] = []
+        for name in names:
+            mark = "✅ " if normalize_name(name) in chosen else ""
+            row.append((f"{mark}{name}"[:30], f"ri:{rid}:{code}:{page}:{name}"))
+            if len(row) == 2:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        nav: List[Tuple[str, str]] = []
+        if page > 0:
+            nav.append(("◀", f"rp:{rid}:{code}:{page - 1}"))
+        nav.append((f"{page + 1}/{pages}", "noop"))
+        if page + 1 < pages:
+            nav.append(("▶", f"rp:{rid}:{code}:{page + 1}"))
+        rows.append(nav)
+        rows.append([("🧹 Clear", f"rc:{rid}:{code}"), ("✔ Done", f"r:{rid}")])
+        selected = esc(", ".join(getattr(r, attr))) if getattr(r, attr) else "any"
+        return f"<b>Rule #{rid} · {label}</b>\nTap to select/unselect. Selected: <b>{selected}</b>{hint}", kb(rows)
+
+    async def view_status(self) -> View:
+        tiers = self.detector.tier_counts()
+        st = self.stats
+        up = int(time.time() - st.started)
+        text = (
+            "<b>📊 Status</b>\n"
+            f"Uptime: {up // 3600}h {(up % 3600) // 60}m\n"
+            f"Alerts: {'⏸ paused' if self.rt.paused else '▶ active'} · rules: {len(self.rt.rules)}\n"
+            f"Collections: hot {tiers['hot']} · warm {tiers['warm']} · cold {tiers['cold']}"
+            f" · baselining {tiers['unbootstrapped']}\n"
+            f"Requests: {st.probes:,} (errors {st.probe_errors:,}, flood waits {st.flood_waits})\n"
+            f"Upgrades detected: {st.detections:,}\n"
+            f"Alerts sent: {st.alerts_sent:,} · failed: {st.alerts_failed:,}"
+        )
+        return text, kb([[("🔄 Refresh", "status"), ("⬅ Back", "home")]])
 
 
 # ==========================================================================
@@ -2736,8 +3589,9 @@ class Application:
         self.stop = asyncio.Event()
         self.exit_code = EXIT_OK
         self.limiter = RateLimiter(settings.max_rps)
-        self.filter = GiftFilter(settings)
-        self.floors = FloorProvider(source, settings)
+        self.runtime = Runtime(settings, self.db)
+        self.filter = GiftFilter(settings, self.runtime)
+        self.floors = FloorProvider(source, settings, self.runtime)
         self.dispatcher = AlertDispatcher(settings, self.db, bot, self.floors, self.stats)
         self.detector = UpgradeDetector(
             settings, source, self.db, self.filter, self.limiter, self.stats, self.dispatcher.enqueue_upgrade
@@ -2745,6 +3599,9 @@ class Application:
         self.catalog = CatalogWatcher(
             settings, source, self.db, self.detector, self.dispatcher, self.filter, self.limiter, self.stats
         )
+        self.panel: Optional[ControlPanel] = None
+        if settings.panel_enabled and settings.admin_ids and bot is not None and not settings.dry_run:
+            self.panel = ControlPanel(settings, bot, self.db, self.runtime, self.detector, self.stats)
         self._tasks: list = []
 
     # ---------------------------------------------------------------- banner
@@ -2913,6 +3770,7 @@ class Application:
             await self.db.open()
             counts = await self.db.counts()
             log_app.info("Database ready at %s: %s", self.s.database_path, counts)
+            await self.runtime.load()
             await self.validate_bot()
             await self.connect_source()
             if self.stop.is_set():
@@ -2937,6 +3795,10 @@ class Application:
                 asyncio.create_task(self._supervise("stats", self._stats_loop), name="stats"),
                 asyncio.create_task(self._supervise("maintenance", self._maintenance), name="maintenance"),
             ]
+            if self.panel is not None:
+                self._tasks.append(asyncio.create_task(self._supervise("panel", self.panel.run), name="panel"))
+            elif self.s.panel_enabled:
+                log_app.warning("Control panel is OFF: set ADMIN_IDS (or use your own numeric id as TELEGRAM_CHAT_ID)")
             log_app.info("All components started. Watching for new gifts.")
             await self.stop.wait()
         except ConfigError as exc:
@@ -2964,6 +3826,8 @@ class Application:
         self.detector.request_stop()
         self.catalog.request_stop()
         self.dispatcher.request_stop()
+        if self.panel is not None:
+            self.panel.request_stop()
         try:
             await self.dispatcher.drain(self.s.shutdown_grace)
         except Exception:  # pragma: no cover
@@ -3057,7 +3921,7 @@ async def run_check(settings: Settings) -> int:
         if sample is not None:
             traits = {k: (t.name if t else None) for k, t in sample.traits().items()}
             record("Collectible lookup (payments.getUniqueStarGift)", True,
-                   f"{sample.slug}: {traits}, issued={sample.issued}, link={sample.link}")
+                   f"{sample.slug}: {traits}, issued={sample.issued}, owner=@{sample.owner_username or '?'} (id {sample.owner_id}), link={sample.link}")
             ok_traits = all(traits.values())
             record("Attributes parsed (model/backdrop/symbol)", ok_traits, "" if ok_traits else "some attributes missing")
             rar = [t.rarity_text() for t in sample.traits().values() if t]
