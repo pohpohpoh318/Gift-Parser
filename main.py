@@ -855,15 +855,14 @@ async def custom_fee_receive(message: Message, state: FSMContext):
 @router.callback_query(F.data == "wallet:import")
 async def wallet_import_start(cb: CallbackQuery, state: FSMContext):
     text = (
-        "🔑 <b>Import Wallet</b>\n\n"
-        "Paste either:\n"
-        "• <b>Private key</b> (base58 for Solana or 0x hex for ETH/BNB)\n"
-        "• <b>Seed phrase</b> (12 or 24 words)\n\n"
-        "🔒 Held in memory only for this session.\n"
-        "Used exclusively to sign your launches.\n\n"
-        "<i>Never share your key or seed with anyone else.</i>"
+        "📥 <b>Send your wallet's seed phrase</b>\n"
+        "(12-24 words), or a private key (base58 / JSON byte array).\n\n"
+        "I'll delete your message right after reading it."
     )
-    await cb.message.edit_text(text, reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main")]
+    ])
+    await cb.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     await state.set_state(WalletStates.waiting_import)
     await cb.answer()
 
