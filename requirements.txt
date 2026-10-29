@@ -4,3 +4,6 @@ solders
 base58
 web3
 eth-account
+Pillow>=10.0.0
+
+
