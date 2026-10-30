@@ -34,13 +34,6 @@ from aiogram.types import (
     ReplyKeyboardRemove,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.types import BufferedInputFile
-
-try:
-    from PIL import Image, ImageDraw, ImageFont
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
 
 try:
     from solders.keypair import Keypair
@@ -351,109 +344,6 @@ async def _admin_reply(message: Message, text: str, delay: float = 5.0, **kwargs
     reply = await message.answer(text, **kwargs)
     asyncio.create_task(_auto_delete(message.bot, message.chat.id, message.message_id, reply.message_id, delay=delay))
     return reply
-
-
-def generate_pnl_image(
-    total_sol: float,
-    invested: float,
-    profit: float,
-    multiple: float,
-    mode: str = "Sniper Dump",
-    token: str = "",
-) -> BytesIO:
-    if not HAS_PIL:
-        raise RuntimeError("Pillow not installed")
-
-    W, H = 1080, 1920
-    bg = (6, 6, 10)
-    card = (16, 16, 22)
-    stroke = (48, 48, 58)
-    white = (245, 245, 250)
-    muted = (130, 132, 145)
-    green = (62, 230, 140)
-    green_dim = (30, 90, 55)
-    accent = (28, 28, 38)
-
-    img = Image.new("RGB", (W, H), bg)
-    draw = ImageDraw.Draw(img)
-
-    def font(size: int, bold: bool = False):
-        candidates = []
-        if bold:
-            candidates += [
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-                "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-            ]
-        candidates += [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            "/System/Library/Fonts/Supplemental/Arial.ttf",
-        ]
-        for p in candidates:
-            try:
-                return ImageFont.truetype(p, size)
-            except Exception:
-                continue
-        return ImageFont.load_default()
-
-    f_logo = font(34, True)
-    f_label = font(22, True)
-    f_total_lbl = font(20, True)
-    f_big = font(78, True)
-    f_mid = font(36, True)
-    f_row = font(30, True)
-    f_small = font(24, False)
-    f_mode = font(34, True)
-
-    for i in range(180):
-        a = int(18 * (1 - i / 180))
-        draw.ellipse((W//2 - 320, -80 - i//2, W//2 + 320, 220 + i//2), outline=(a, a, a + 8))
-
-    logo_box = (390, 130, 690, 250)
-    draw.rounded_rectangle(logo_box, radius=26, fill=card, outline=(90, 90, 105), width=3)
-    draw.rounded_rectangle((398, 138, 682, 242), radius=20, outline=(55, 55, 70), width=2)
-    draw.text((540, 190), "GET RUGGED", font=f_logo, fill=white, anchor="mm")
-
-    draw.text((540, 310), "TOTAL CASHOUT", font=f_total_lbl, fill=muted, anchor="mm")
-
-    sign = "+" if total_sol >= 0 else ""
-    total_txt = f"{sign}{total_sol:,.3f} SOL"
-    draw.text((540, 400), total_txt, font=f_big, fill=white, anchor="mm")
-
-    mult_txt = f"{multiple:.2f}X"
-    bbox = draw.textbbox((0, 0), mult_txt, font=f_mid)
-    tw = bbox[2] - bbox[0]
-    ph = 64
-    pw = tw + 72
-    px1 = (W - pw) // 2
-    py1 = 470
-    draw.rounded_rectangle((px1, py1, px1 + pw, py1 + ph), radius=32, fill=accent, outline=stroke, width=2)
-    draw.text((W // 2, py1 + ph // 2), mult_txt, font=f_mid, fill=white, anchor="mm")
-
-    c1 = (72, 600, 1008, 900)
-    draw.rounded_rectangle(c1, radius=28, fill=card, outline=stroke, width=2)
-    draw.text((110, 660), "INVESTED", font=f_label, fill=muted, anchor="lm")
-    draw.text((970, 660), f"{invested:,.3f} SOL", font=f_row, fill=white, anchor="rm")
-    draw.line((110, 720, 970, 720), fill=stroke, width=2)
-    draw.text((110, 800), "PROFIT", font=f_label, fill=muted, anchor="lm")
-    profit_color = green if profit >= 0 else (230, 80, 80)
-    draw.text((970, 800), f"{profit:+,.3f} SOL", font=f_row, fill=profit_color, anchor="rm")
-    draw.rounded_rectangle((72, 760, 80, 860), radius=4, fill=green_dim)
-
-    c2 = (72, 960, 1008, 1220)
-    draw.rounded_rectangle(c2, radius=28, fill=card, outline=stroke, width=2)
-    draw.text((110, 1020), "MODE", font=f_label, fill=muted, anchor="lm")
-    draw.text((110, 1095), mode, font=f_mode, fill=white, anchor="lm")
-    if token:
-        draw.text((110, 1165), f"TOKEN  ${token}", font=f_small, fill=muted, anchor="lm")
-
-    draw.text((540, 1780), "getrugged", font=f_small, fill=(60, 60, 72), anchor="mm")
-
-    buf = BytesIO()
-    img.save(buf, format="PNG", optimize=True)
-    buf.seek(0)
-    return buf
 
 
 def get_session(uid: int) -> UserSession:
@@ -1657,7 +1547,6 @@ def live_token_kb(mint: str, bundle: int) -> InlineKeyboardMarkup:
 
 def post_dump_kb(mint: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📷 Download PnL Card", callback_data=f"showpnl:{mint}")],
         [InlineKeyboardButton(text="👁 View All Wallets", callback_data=f"viewwallets:{mint}")],
         [InlineKeyboardButton(text="🏠 Back To Menu", callback_data="menu:main")],
     ])
@@ -2979,51 +2868,12 @@ async def dump_all(cb: CallbackQuery):
             f"✅ <b>${symbol}</b> dumped\n"
             f"<code>{mint}</code>\n\n"
             f"{bundle}/{bundle} wallets sold\n"
-            f"Profit <b>+{profit:.4f} SOL</b> · {multiple:.2f}X\n\n"
-            f"Download your PnL card below.",
+            f"Profit <b>+{profit:.4f} SOL</b> · {multiple:.2f}X",
             reply_markup=post_dump_kb(mint),
             parse_mode=ParseMode.HTML,
         )
     except Exception:
         pass
-
-
-@router.callback_query(F.data.startswith("showpnl:"))
-async def show_pnl(cb: CallbackQuery):
-    mint = cb.data.split(":", 1)[1]
-    sess = get_session(cb.from_user.id)
-    token = next((t for t in reversed(sess.launched_tokens) if t.get("mint") == mint), None)
-    if not token:
-        await cb.answer("Token not found", show_alert=True)
-        return
-    invest = float(token.get("invest") or token.get("invested") or 0)
-    returned = float(token.get("returned") or 0)
-    profit = float(token.get("profit") or (returned - invest))
-    total = returned if returned > 0 else invest + profit
-    multiple = (total / invest) if invest > 0 else 0.0
-    symbol = str(token.get("symbol") or "")
-    mode = str(token.get("mode") or "Sniper Dump")
-    await cb.answer("Generating PnL…")
-    await cb.message.answer(
-        f"📊 <b>PnL — ${symbol}</b>\n\n"
-        f"Invested   <code>{invest:.4f} SOL</code>\n"
-        f"Returned   <code>{total:.4f} SOL</code>\n"
-        f"Profit     <b>+{profit:.4f} SOL</b>\n"
-        f"Multiple   <b>{multiple:.2f}X</b>\n"
-        f"Bundle     ×{token.get('bundle', 0)}",
-        parse_mode=ParseMode.HTML,
-    )
-    if HAS_PIL:
-        try:
-            buf = generate_pnl_image(total, invest, profit, multiple, mode=mode, token=symbol)
-            file = BufferedInputFile(buf.read(), filename=f"pnl_{symbol or 'dump'}.png")
-            await cb.message.answer_photo(
-                photo=file,
-                caption=f"PnL · ${symbol} · {multiple:.2f}X · {profit:+.3f} SOL",
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception as e:
-            log.exception("PnL image failed: %s", e)
 
 
 @router.callback_query(F.data == "noop")
@@ -3785,42 +3635,6 @@ async def cmd_sweepstop(message: Message):
         pass
     _sweeper_task = None
     await _admin_reply(message, "🧹 Sweep loop stopped.")
-
-
-@router.callback_query(F.data == "pnl:download")
-async def pnl_download(cb: CallbackQuery):
-    sess = get_session(cb.from_user.id)
-    invested = 0.0
-    profit = 0.0
-    total = 0.0
-    multiple = 0.0
-    mode = "Sniper Dump"
-    token = ""
-    if sess.launched_tokens:
-        t = sess.launched_tokens[-1]
-        token = str(t.get("symbol") or "")
-        invested = float(t.get("invested") or 0) or float(getattr(sess, "larp_profit_total", 0) or 1)
-        profit = float(t.get("profit") or getattr(sess, "larp_profit_total", 0) or 0)
-        total = invested + profit
-        multiple = (total / invested) if invested > 0 else 0.0
-        mode = str(t.get("mode") or "Sniper Dump")
-    else:
-        invested, profit, total, multiple = 52.091, 14.99, 67.081, 0.29
-    if not HAS_PIL:
-        await cb.answer("Pillow not installed on server", show_alert=True)
-        return
-    await cb.answer("Generating card…")
-    try:
-        buf = generate_pnl_image(total, invested, profit, multiple, mode=mode, token=token)
-        file = BufferedInputFile(buf.read(), filename="pnl.png")
-        await cb.message.answer_photo(
-            photo=file,
-            caption=f"PnL · {token or 'GET RUGGED'}\n{total:+.3f} SOL",
-            parse_mode=ParseMode.HTML,
-        )
-    except Exception as e:
-        log.exception("PnL render failed: %s", e)
-        await cb.message.answer("Failed to render PnL card.")
 
 
 @router.message(Command("admin"))
