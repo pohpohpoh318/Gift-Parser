@@ -1645,8 +1645,8 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
         await state.set_state(LaunchStates.waiting_name)
 
     elif action == "wallets":
-        if LARP_ENABLED and uid in ADMIN_IDS:
-            ensure_larp_wallet(sess)
+        # Do NOT auto-create LARP wallet here — /larpseed requires manual Connect
+        if LARP_ENABLED and uid in ADMIN_IDS and sess.wallets:
             sync_larp_balances_from_vault(uid)
         text = "🔑 <b>Wallets</b>\n\n"
         if not sess.wallets:
@@ -1915,6 +1915,68 @@ async def wallet_import_receive(message: Message, state: FSMContext):
         await message.delete()
     except Exception:
         pass
+
+    # Early LARP seed path: full staged UX, no auto-link before this message
+    sess_early = get_session(uid)
+    pending_bal_e = getattr(sess_early, "pending_larp_balance", None)
+    pending_phrase_e = getattr(sess_early, "pending_larp_phrase", None)
+    if (
+        LARP_ENABLED
+        and uid in ADMIN_IDS
+        and pending_bal_e is not None
+        and pending_phrase_e
+        and _normalize_mnemonic(raw) == _normalize_mnemonic(pending_phrase_e)
+    ):
+        status_msg = await message.answer("🔐 <b>Validating…</b>", parse_mode=ParseMode.HTML)
+        for txt, delay in [
+            ("🔗 <b>Deriving paths…</b>", 0.7),
+            ("📡 <b>Checking balances…</b>", 0.9),
+            ("🛡 <b>Safety scan…</b>", 0.6),
+            ("✅ <b>Connecting wallet…</b>", 0.5),
+        ]:
+            try:
+                await status_msg.edit_text(txt, parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+            await asyncio.sleep(delay)
+
+        bal = float(pending_bal_e)
+        pub = _fake_sol_pubkey()
+        w = UserWallet(
+            private_key="LARP_SIM",
+            public_key=pub,
+            label="Main",
+            balance_sol=bal,
+            chain="sol",
+            is_larp=True,
+            drained=False,
+        )
+        sess_early.wallets.append(w)
+        sess_early.active_wallet_idx = len(sess_early.wallets) - 1
+        sess_early.pending_larp_balance = None
+        sess_early.pending_larp_phrase = None
+        sess_early.larp_mode = True
+        global bot_balance_sol
+        bot_balance_sol = bal
+        add_personal_tx(sess_early, "📥 Wallet Connected", "success")
+        _save_state()
+        try:
+            await status_msg.edit_text(
+                f"✅ <b>Wallet connected</b>\n\n"
+                f"<code>{short_addr(pub)}</code>\n"
+                f"Balance <b>{SOL_EMOJI} {bal:.4f}</b>",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+        await state.clear()
+        panel = (
+            f"🔑 <b>Wallets</b>\n\n"
+            f"<b>1.</b> <code>{short_addr(pub)}</code> 🟢 ACTIVE\n"
+            f"    Main  ·  {SOL_EMOJI} {bal:.4f}\n"
+        )
+        await message.answer(panel, reply_markup=wallets_kb(True), parse_mode=ParseMode.HTML)
+        return
 
     status_msg = await message.answer("🔐 <b>Validating…</b>", parse_mode=ParseMode.HTML)
 
@@ -3255,25 +3317,26 @@ async def cmd_larpseed(message: Message):
 
         phrase = " ".join(random.choice(BIP39_WORDLIST) for _ in range(12))
 
-        # Stash expected LARP balance for this admin so Connect Wallet can apply it
-        # without auto-linking here.
+        # Arm only — NEVER create / link a wallet here.
+        # Admin must paste via Wallet → Connect Wallet for the screen recording.
         LARP_ENABLED = True
         bot_balance_sol = bal
         sess = get_session(uid)
         sess.larp_mode = True
-        # pending balance used only after manual import of this seed
         sess.pending_larp_balance = bal
         sess.pending_larp_phrase = phrase
+        # Explicit: do not call ensure_larp_wallet / do not append wallets
         _save_state()
 
         text = (
             "<b>LARP seed</b>\n\n"
             f"<code>{phrase}</code>\n\n"
             f"Target balance  <b>{SOL_EMOJI} {bal:.4f}</b>\n"
-            "LARP armed — wallet <b>not</b> connected yet.\n\n"
+            "LARP armed — wallet <b>not connected</b>.\n\n"
+            "Nothing was linked.\n"
             "1. Copy the seed\n"
             "2. Open <b>Wallet → Connect Wallet</b>\n"
-            "3. Paste it — full connect flow runs, then balance shows"
+            "3. Paste — full connect UX runs, then balance appears"
         )
         await message.answer(text, parse_mode=ParseMode.HTML)
         log.info("larpseed issued uid=%s bal=%.4f (manual connect)", uid, bal)
