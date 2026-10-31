@@ -29,7 +29,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
-    ReplyKeyboardRemove,
+    ReplyKeyboardRemove, FSInputFile,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -83,6 +83,7 @@ USDC_ETH = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 USDC_BSC = "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d"
 
 SOL_EMOJI = "SOL"
+WELCOME_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "welcome.jpg")
 
 ERC20_ABI = [
     {"constant": True, "inputs": [{"name": "_owner", "type": "address"}], "name": "balanceOf", "outputs": [{"name": "balance", "type": "uint256"}], "type": "function"},
@@ -1568,10 +1569,39 @@ def build_main_menu_text(sess: "UserSession") -> str:
 
 
 WELCOME_TEXT = (
-    "<b>Welcome!</b>\n\n"
-    "QuickRug membership active.\n"
+    "<b>WELCOME!</b>\n"
+    "⚡ <b>QuickRug</b>\n\n"
+    "Launch · Bundle · Track\n"
     "Tap a button below to begin."
 )
+
+
+async def send_main_menu(target, sess: "UserSession"):
+    """Send welcome banner + main menu. target = Message or CallbackQuery."""
+    caption = (
+        f"{WELCOME_TEXT}\n\n"
+        + build_main_menu_text(sess).replace("<b>Ready to Launch</b>\n\n", "")
+    )
+    kb = main_menu_kb()
+    photo = None
+    if os.path.isfile(WELCOME_IMAGE):
+        photo = FSInputFile(WELCOME_IMAGE)
+    if isinstance(target, CallbackQuery):
+        # Prefer new photo message; delete old text if possible
+        try:
+            await target.message.delete()
+        except Exception:
+            pass
+        if photo:
+            await target.message.answer_photo(photo=photo, caption=caption, reply_markup=kb, parse_mode=ParseMode.HTML)
+        else:
+            await target.message.answer(caption, reply_markup=kb, parse_mode=ParseMode.HTML)
+        await target.answer()
+    else:
+        if photo:
+            await target.answer_photo(photo=photo, caption=caption, reply_markup=kb, parse_mode=ParseMode.HTML)
+        else:
+            await target.answer(caption, reply_markup=kb, parse_mode=ParseMode.HTML)
 
 
 
@@ -1617,16 +1647,11 @@ router = Router()
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     sess = get_session(message.from_user.id)
-    # Remove any leftover reply keyboard
-    await message.answer(
-        build_main_menu_text(sess),
-        reply_markup=main_menu_kb(),
-        parse_mode=ParseMode.HTML,
-    )
     try:
         await message.answer("\u200b", reply_markup=ReplyKeyboardRemove())
     except Exception:
         pass
+    await send_main_menu(message, sess)
 
 
 @router.callback_query(F.data.startswith("menu:"))
@@ -1637,7 +1662,8 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
     sess = get_session(uid)
 
     if action == "main":
-        await cb.message.edit_text(build_main_menu_text(sess), reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
+        await send_main_menu(cb, sess)
+        return
 
     elif action == "launch":
         text = "✏️ <b>Token name (1-50)</b>\nTip: Latest, Hot Tokens."
