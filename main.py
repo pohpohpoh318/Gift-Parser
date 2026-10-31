@@ -1583,17 +1583,15 @@ WELCOME_TEXT = (
 
 
 async def safe_edit(cb: CallbackQuery, text: str, reply_markup=None, parse_mode=ParseMode.HTML):
-    """Edit message text, or replace photo messages that cannot be edit_text'd."""
+    """Edit text menus. Photo (welcome) messages are deleted and replaced with text."""
+    # Prefer in-place edit for normal text messages
     try:
-        await cb.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
-        return
+        if not (cb.message.photo or cb.message.video or cb.message.document):
+            await cb.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            return
     except Exception:
         pass
-    try:
-        await cb.message.edit_caption(caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
-        return
-    except Exception:
-        pass
+    # Photo / media: drop the banner, send clean text
     try:
         await cb.message.delete()
     except Exception:
