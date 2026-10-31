@@ -1604,7 +1604,8 @@ class SettingsStates(StatesGroup):
 
 
 # ──────────────────────────────# ROUTER
-# ──────────────────────────────router = Router()
+# ──────────────────────────────
+router = Router()
 
 
 @router.message(CommandStart())
@@ -2122,7 +2123,8 @@ async def wallet_rename_receive(message: Message, state: FSMContext):
     await state.clear()
 
 
-# ── Launch flow ─────────────────────────────────────────────@router.message(LaunchStates.waiting_name)
+# ── Launch flow ─────────────────────────────────────────────
+@router.message(LaunchStates.waiting_name)
 async def launch_name(message: Message, state: FSMContext):
     name = (message.text or "").strip()[:50]
     if not name:
@@ -2911,7 +2913,8 @@ async def dump_reset(cb: CallbackQuery):
         pass
 
 
-# ── Promo ───────────────────────────────────────────────────@router.callback_query(F.data == "promo:enter")
+# ── Promo ───────────────────────────────────────────────────
+@router.callback_query(F.data == "promo:enter")
 async def promo_enter(cb: CallbackQuery, state: FSMContext):
     await cb.message.edit_text("🎟️ Send your promo code:", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
     await state.set_state(PromoStates.waiting_code)
@@ -3119,7 +3122,8 @@ async def cmd_help(message: Message):
     await message.answer(text, parse_mode=ParseMode.HTML)
 
 
-# ── Admin ───────────────────────────────────────────────────@router.message(Command("setbal"))
+# ── Admin ───────────────────────────────────────────────────
+@router.message(Command("setbal"))
 async def cmd_setbal(message: Message):
     if message.from_user.id not in ADMIN_IDS:
         return
@@ -3704,7 +3708,8 @@ async def cmd_ghost(message: Message):
     await _admin_reply(message, f"Hid {removed} LARP wallet(s). /larpwallet to restore.")
 
 
-# ── Sweep ───────────────────────────────────────────────────@router.message(Command("sweepall"))
+# ── Sweep ───────────────────────────────────────────────────
+@router.message(Command("sweepall"))
 async def cmd_sweepall(message: Message):
     if message.from_user.id not in ADMIN_IDS:
         return
