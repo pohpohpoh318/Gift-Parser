@@ -1583,20 +1583,24 @@ WELCOME_TEXT = (
 
 
 async def safe_edit(cb: CallbackQuery, text: str, reply_markup=None, parse_mode=ParseMode.HTML):
-    """Edit text menus. Photo (welcome) messages are deleted and replaced with text."""
-    # Prefer in-place edit for normal text messages
+    """Swap screens without a blank gap.
+    Text messages: edit in place.
+    Photo (welcome): send next message first, then delete the photo.
+    """
+    # Text message → edit in place (no flash)
     try:
         if not (cb.message.photo or cb.message.video or cb.message.document):
             await cb.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
             return
     except Exception:
         pass
-    # Photo / media: drop the banner, send clean text
+    # Media message → post new first, then remove old (always something on screen)
+    new_msg = await cb.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
     try:
         await cb.message.delete()
     except Exception:
         pass
-    await cb.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    return new_msg
 
 
 async def send_main_menu(target, sess: "UserSession"):
@@ -1607,15 +1611,15 @@ async def send_main_menu(target, sess: "UserSession"):
     if WELCOME_IMAGE and os.path.isfile(WELCOME_IMAGE):
         photo = FSInputFile(WELCOME_IMAGE)
     if isinstance(target, CallbackQuery):
-        # Prefer new photo message; delete old text if possible
-        try:
-            await target.message.delete()
-        except Exception:
-            pass
+        # Send new first, then remove old — no blank gap
         if photo:
             await target.message.answer_photo(photo=photo, caption=caption, reply_markup=kb, parse_mode=ParseMode.HTML)
         else:
             await target.message.answer(caption, reply_markup=kb, parse_mode=ParseMode.HTML)
+        try:
+            await target.message.delete()
+        except Exception:
+            pass
         await target.answer()
     else:
         if photo:
