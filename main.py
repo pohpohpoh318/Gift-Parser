@@ -20,6 +20,12 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 from io import BytesIO
 
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -3184,6 +3190,149 @@ async def safety_check(message: Message, state: FSMContext):
         report += "🟢 Clean profile on standard checks."
     await message.answer(report, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
     await state.clear()
+
+
+def _load_font(size: int):
+    if not HAS_PIL:
+        return None
+    for name in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+    ):
+        try:
+            return ImageFont.truetype(name, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def generate_pnl_card(
+    symbol: str,
+    pct: float,
+    profit_usd: float,
+    entry: float,
+    exit_: float,
+    held: str,
+    mint_short: str = "",
+) -> BytesIO:
+    """Purple QuickRug PnL card — no external services."""
+    W, H = 900, 520
+    # deep purple / black
+    bg = (12, 8, 22)
+    purple = (168, 85, 247)
+    purple_dim = (88, 40, 140)
+    green = (52, 211, 153)
+    red = (248, 113, 113)
+    white = (245, 243, 255)
+    muted = (160, 150, 180)
+
+    img = Image.new("RGB", (W, H), bg)
+    d = ImageDraw.Draw(img)
+
+    # soft glow orbs
+    for cx, cy, r, col in (
+        (120, 80, 180, (60, 20, 100)),
+        (780, 420, 220, (40, 10, 80)),
+        (450, 260, 140, (30, 15, 55)),
+    ):
+        d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=col)
+
+    # top brand bar
+    d.rectangle((0, 0, W, 6), fill=purple)
+
+    font_brand = _load_font(28)
+    font_sym = _load_font(42)
+    font_pct = _load_font(96)
+    font_usd = _load_font(48)
+    font_small = _load_font(24)
+    font_tiny = _load_font(20)
+
+    d.text((40, 28), "QuickRug", font=font_brand, fill=purple)
+    d.text((W - 40, 32), "PnL Card", font=font_tiny, fill=muted, anchor="ra")
+
+    # symbol
+    sym = symbol if symbol.startswith("$") else f"${symbol}"
+    d.text((40, 90), sym, font=font_sym, fill=white)
+    if mint_short:
+        d.text((40, 140), mint_short, font=font_tiny, fill=muted)
+
+    # big pct
+    color = green if pct >= 0 else red
+    pct_txt = f"{pct:+.1f}%"
+    d.text((40, 200), pct_txt, font=font_pct, fill=color)
+
+    # usd profit
+    usd_txt = f"{profit_usd:+,.2f} USD"
+    d.text((40, 320), usd_txt, font=font_usd, fill=color)
+
+    # footer stats
+    y = 420
+    d.line((40, y - 16, W - 40, y - 16), fill=purple_dim, width=1)
+    col_w = (W - 80) // 3
+    for i, (label, val) in enumerate((
+        ("Entry", f"${entry:.6f}" if entry < 1 else f"${entry:,.4f}"),
+        ("Exit", f"${exit_:.6f}" if exit_ < 1 else f"${exit_:,.4f}"),
+        ("Held", held),
+    )):
+        x = 40 + i * col_w
+        d.text((x, y), label, font=font_tiny, fill=muted)
+        d.text((x, y + 28), val, font=font_small, fill=white)
+
+    buf = BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+    return buf
+
+
+@router.message(Command("pnlcard"))
+async def cmd_pnlcard(message: Message):
+    """ /pnlcard random  |  /pnlcard $TOKEN  """
+    if not HAS_PIL:
+        await message.answer("Pillow not installed — cannot render card.")
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else "random"
+
+    if arg.lower() == "random":
+        symbols = ["PEPE", "BONK", "WIF", "POPCAT", "MEW", "BOME", "MOODENG", "GIGA", "FWOG", "AI16Z"]
+        symbol = random.choice(symbols)
+        pct = round(random.uniform(12.0, 180.0) * random.choice([1, 1, 1, -1]), 1)
+        # bias positive for share cards
+        if random.random() < 0.75:
+            pct = abs(pct)
+        entry = round(random.uniform(0.00001, 0.05), 6)
+        exit_ = round(entry * (1 + pct / 100), 6)
+        # fake SOL size → USD
+        sol_size = round(random.uniform(0.5, 25.0), 2)
+        profit_usd = round(sol_size * 180 * (pct / 100), 2)
+        mins = random.randint(1, 48)
+        secs = random.randint(0, 59)
+        held = f"{mins}m {secs}s" if mins < 60 else f"{mins // 60}h {mins % 60}m"
+        mint_short = _fake_sol_pubkey()[:4] + "…" + _fake_sol_pubkey()[-4:]
+    else:
+        symbol = arg.lstrip("$").upper()[:12]
+        pct = round(random.uniform(20.0, 120.0), 1)
+        entry = round(random.uniform(0.00005, 0.02), 6)
+        exit_ = round(entry * (1 + pct / 100), 6)
+        profit_usd = round(random.uniform(40.0, 2500.0), 2)
+        held = f"{random.randint(1, 25)}m {random.randint(0, 59)}s"
+        mint_short = ""
+
+    try:
+        buf = generate_pnl_card(symbol, pct, profit_usd, entry, exit_, held, mint_short)
+        from aiogram.types import BufferedInputFile
+        photo = BufferedInputFile(buf.read(), filename=f"pnl_{symbol}.png")
+        await message.answer_photo(
+            photo=photo,
+            caption=f"<b>${symbol.lstrip('$')}</b> · {pct:+.1f}% · {profit_usd:+,.2f} USD",
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception as e:
+        log.exception("pnlcard failed")
+        await message.answer(f"Card render failed: {e}")
+
 
 @router.message(Command("help"))
 async def cmd_help(message: Message):
