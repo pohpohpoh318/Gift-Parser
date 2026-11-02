@@ -31,7 +31,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
-    ReplyKeyboardRemove,
+    ReplyKeyboardRemove, FSInputFile, InputMediaPhoto,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -1737,6 +1737,70 @@ WELCOME_TEXT = (
     "──────────────────────"
 )
 
+# Menu-only banner image (repo root / deploy cwd). Only used on main menu.
+WELCOME_IMAGE_CANDIDATES = (
+    os.getenv("WELCOME_IMAGE", ""),
+    "welcome.jpg",
+    "welcome.JPG",
+    "Welcome.jpg",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "welcome.jpg"),
+)
+
+
+def welcome_image_path() -> Optional[str]:
+    for p in WELCOME_IMAGE_CANDIDATES:
+        if p and os.path.isfile(p):
+            return p
+    return None
+
+
+async def send_main_menu(target, sess: UserSession, *, edit: bool = False):
+    """Send or refresh main menu. Photo only on the menu screen."""
+    caption = build_main_menu_text(sess)
+    kb = main_menu_kb()
+    img = welcome_image_path()
+    bot = target.bot if hasattr(target, "bot") else None
+
+    # CallbackQuery path (edit existing message when possible)
+    if edit and hasattr(target, "message"):
+        msg = target.message
+        try:
+            if img:
+                media = InputMediaPhoto(
+                    media=FSInputFile(img),
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                )
+                await msg.edit_media(media=media, reply_markup=kb)
+                return
+            # No image: plain text edit (or caption if current msg is photo)
+            if msg.photo:
+                await msg.edit_caption(caption=caption, reply_markup=kb, parse_mode=ParseMode.HTML)
+            else:
+                await msg.edit_text(caption, reply_markup=kb, parse_mode=ParseMode.HTML)
+            return
+        except Exception:
+            # Fallback: delete old + send fresh menu message
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+
+    # Fresh send ( /start or fallback )
+    if img:
+        await target.answer_photo(
+            photo=FSInputFile(img),
+            caption=caption,
+            reply_markup=kb,
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await target.answer(
+            caption,
+            reply_markup=kb,
+            parse_mode=ParseMode.HTML,
+        )
+
 
 # ──────────────────────────────────────────────
 # FSM
@@ -1778,12 +1842,7 @@ router = Router()
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     sess = get_session(message.from_user.id)
-    # Remove any leftover reply keyboard
-    await message.answer(
-        build_main_menu_text(sess),
-        reply_markup=main_menu_kb(),
-        parse_mode=ParseMode.HTML,
-    )
+    await send_main_menu(message, sess, edit=False)
     try:
         await message.answer("\u200b", reply_markup=ReplyKeyboardRemove())
     except Exception:
@@ -1798,18 +1857,7 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
     sess = get_session(uid)
 
     if action == "main":
-        # FIX 7: photo messages need edit_caption, not edit_text
-        try:
-            if cb.message.photo:
-                await cb.message.edit_caption(
-                    caption=build_main_menu_text(sess),
-                    reply_markup=main_menu_kb(),
-                    parse_mode=ParseMode.HTML,
-                )
-            else:
-                await cb.message.edit_text(build_main_menu_text(sess), reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
-        except Exception:
-            await cb.message.edit_text(build_main_menu_text(sess), reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
+        await send_main_menu(cb, sess, edit=True)
 
     elif action == "launch":
         text = "<b>Token name</b>  (1–50 chars)\n\nEnter a name for your token:"
