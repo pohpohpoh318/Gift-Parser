@@ -1714,26 +1714,27 @@ def build_main_menu_text(sess: "UserSession") -> str:
 
     return (
         "<b>Solana Token Launcher</b>\n"
-        "────────────────────\n\n"
-        f"Wallet       {wallet_line}\n"
-        f"Launches     <b>{launches_left}</b> remaining\n"
-        f"Portfolio    <b>{total_launches}</b> total  ·  <b>{live}</b> live\n"
-        f"Last tx      {last_line}\n"
-        f"Sniper       <b>{sniper}</b>  ·  MEV guard  <b>{mev}</b>\n\n"
-        "────────────────────"
+        "──────────────────────\n\n"
+        f"Wallet:      {wallet_line}\n"
+        f"Launches:    <i>{launches_left} remaining</i>\n"
+        f"Portfolio:   <i>{total_launches} total</i>  ·  <i>{live} live</i>\n"
+        f"Last tx:     <i>{last_line}</i>\n"
+        f"Protection:  <i>Sniper {sniper}  ·  MEV {mev}</i>\n\n"
+        "──────────────────────"
     )
 
 
 WELCOME_TEXT = (
-    "<b>Solana Token Launcher</b>\n\n"
-    "Launch and trade tokens across Solana launchpads.\n\n"
-    "<b>Features</b>\n"
-    "  · Step-by-step token deploy\n"
-    "  · Auto bundling up to ×25\n"
-    "  · Sniper and MEV guard\n"
-    "  · Safety scan before launch\n"
-    "  · Live tx tracker\n\n"
-    "Select an option below:"
+    "<b>Solana Token Launcher</b>\n"
+    "──────────────────────\n\n"
+    "<i>Launch and trade tokens across Solana launchpads.</i>\n\n"
+    "<b>Features:</b>\n"
+    "  · <i>Step-by-step token deploy</i>\n"
+    "  · <i>Auto bundling up to ×25</i>\n"
+    "  · <i>Sniper and MEV protection</i>\n"
+    "  · <i>Safety scan before launch</i>\n"
+    "  · <i>Live tx tracker</i>\n\n"
+    "──────────────────────"
 )
 
 
