@@ -2911,13 +2911,13 @@ async def dump_all(cb: CallbackQuery):
         ),
         (
             f"<b>DUMP COMPLETE</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"────────────────\n\n"
             f"<b>${symbol}</b>\n"
-            f"<code>{mint}</code>\n\n"
-            f"Invested     <code>{invest:.4f} SOL</code>\n"
-            f"Returned     <code>{returned_total:.4f} SOL</code>\n"
-            f"Profit       <b>+{profit:.4f} SOL</b>\n"
-            f"Multiple     <b>{multiple:.2f}X</b>  ({pct:+.0f}%)\n\n"
+            f"<code>{short_addr(mint)}</code>\n\n"
+            f"<b>Invested:</b>  {invest:.4f} SOL\n"
+            f"<b>Returned:</b>  {returned_total:.4f} SOL\n"
+            f"<b>Profit:</b>  +{profit:.4f} SOL\n"
+            f"<b>Multiple:</b>  {multiple:.2f}X ({pct:+.0f}%)\n\n"
             f"MC collapsed ~${token['mcap']:,}\n"
             f"{bundle}/{bundle} wallets sold · balance updated",
             0.35,
@@ -2936,7 +2936,7 @@ async def dump_all(cb: CallbackQuery):
     try:
         await cb.message.edit_text(
             f"<b>${symbol}</b> dumped\n"
-            f"<code>{mint}</code>\n\n"
+            f"<code>{short_addr(mint)}</code>\n\n"
             f"{bundle}/{bundle} wallets sold\n"
             f"Profit <b>+{profit:.4f} SOL</b> · {multiple:.2f}X",
             reply_markup=post_dump_kb(mint),
