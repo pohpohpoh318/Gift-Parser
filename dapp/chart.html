@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Solana Trading Terminal</title>
+<style>
+:root{--bg:#0d0d0d;--panel:#111;--panel2:#141414;--line:#222;--muted:#777;--text:#e7e7e7;--green:#7dffb3;--red:#ff6b6b;--blue:#8ba8ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;min-width:320px}button,input{font:inherit}button{color:inherit;cursor:pointer}.topbar{height:45px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:#0b0b0b;gap:14px}.brand{display:flex;align-items:center;gap:9px;font-weight:650;white-space:nowrap}.logo{width:24px;height:24px;border-radius:0;background:transparent;display:grid;place-items:center;color:var(--green);flex:0 0 24px}.logo svg{display:block;width:24px;height:24px}.nav{display:flex;gap:18px;color:#8a8a8a;margin-left:20px}.nav span:first-child{color:#eee}.top-left,.top-right{display:flex;align-items:center;min-width:0}.top-right{gap:22px;white-space:nowrap}.metric small{display:block;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.06em}.metric b{font-size:11px;font-weight:600}.green{color:var(--green)}.red{color:var(--red)}.layout{padding:10px;display:grid;grid-template-columns:minmax(0,1fr) 270px;grid-template-rows:minmax(340px,calc(100vh - 275px)) 205px;gap:9px;min-height:650px}.chart-panel,.side-panel,.bottom-panel{background:var(--panel);border:1px solid var(--line);min-width:0}.chart-panel{display:flex;flex-direction:column;overflow:hidden}.chart-head{height:39px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 11px;gap:10px}.pair{display:flex;align-items:center;gap:8px;font-weight:650}.pair-sub{color:var(--muted);font-weight:400}.pill{font-size:9px;padding:2px 5px;border:1px solid #28533d;border-radius:3px;color:var(--green)}.timeframes{display:flex;gap:3px}.timeframes button,.toolbtn{border:0;background:transparent;color:#888;padding:5px 8px;border-radius:3px;font-size:10px}.timeframes button.active,.timeframes button:hover,.toolbtn:hover{background:#242424;color:#eee}.chart-tools{height:32px;display:flex;align-items:center;gap:5px;padding:0 10px;color:#888;border-bottom:1px solid #1b1b1b}.chart-tools .spacer{flex:1}.chart-wrap{position:relative;flex:1;min-height:260px;background:#101010}canvas{display:block;width:100%;height:100%}.chart-footer{height:24px;border-top:1px solid #1d1d1d;display:flex;justify-content:space-between;align-items:center;padding:0 10px;color:#666;font-size:9px}.sidebar{display:flex;flex-direction:column;gap:9px;min-height:0}.side-panel{padding:11px}.balance{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.balance strong{font-size:15px}.balance span{color:#888;font-size:10px}.buy-tabs{display:grid;grid-template-columns:1fr 1fr;background:#191919;padding:3px;border-radius:4px;margin-bottom:11px}.buy-tabs button{border:0;background:transparent;color:#888;padding:7px;border-radius:3px;font-weight:650}.buy-tabs button.active.buy{background:#1d3d2c;color:var(--green)}.buy-tabs button.active.sell{background:#432323;color:var(--red)}.field-label{display:flex;justify-content:space-between;color:#888;font-size:10px;margin:9px 0 5px}.amount{display:flex;border:1px solid #303030;background:#0d0d0d;border-radius:4px;align-items:center;padding:0 9px;height:37px}.amount input{background:transparent;border:0;outline:0;color:#eee;width:100%;font-size:13px}.amount span{color:#aaa}.quick{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin:7px 0}.quick button{background:#1b1b1b;border:1px solid #292929;border-radius:3px;padding:6px 0;color:#aaa;font-size:10px}.quick button:hover{border-color:#555;color:#fff}.buy-action{width:100%;border:0;border-radius:4px;background:var(--green);color:#06150c;font-weight:750;padding:10px;margin-top:7px}.buy-action.sell-action{background:var(--red)}.hint{color:#666;text-align:center;font-size:9px;margin-top:8px}.stats{flex:1}.stats h3{font-size:11px;margin:0 0 10px;font-weight:650}.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.stat{background:#161616;border:1px solid #202020;padding:8px;border-radius:3px}.stat small{display:block;color:#777;font-size:9px;margin-bottom:4px}.stat b{font-size:12px;display:inline-flex;align-items:center;gap:6px}.sol-icon{width:13px;height:11px;display:inline-block;vertical-align:-1px;flex:0 0 auto;color:var(--green)}.bottom-panel{grid-column:1/-1;display:flex;flex-direction:column;overflow:hidden}.bottom-head{height:37px;display:flex;align-items:center;border-bottom:1px solid var(--line);padding:0 10px;gap:17px}.bottom-head button{height:100%;border:0;border-bottom:2px solid transparent;background:transparent;color:#777;padding:0 3px;font-size:11px}.bottom-head button.active{color:#eee;border-bottom-color:var(--green)}.table-wrap{overflow:auto;flex:1}table{width:100%;border-collapse:collapse;white-space:nowrap;font-size:10px}th{text-align:left;color:#777;font-weight:500;background:#121212;position:sticky;top:0;padding:8px 11px;border-bottom:1px solid #252525}td{padding:7px 11px;border-bottom:1px solid #1d1d1d;color:#bbb}tr:hover td{background:#151515}.type{font-weight:700}.type.buy{color:var(--green)}.type.sell{color:var(--red)}.maker{color:#8e9db8}.empty{padding:30px;text-align:center;color:#666}.mobile-stats{display:none}
+@media(max-width:850px){.topbar{padding:0 10px}.nav{display:none}.top-right{gap:11px}.layout{grid-template-columns:minmax(0,1fr) 235px}.metric:nth-child(3),.metric:nth-child(4){display:none}}
+@media(max-width:620px){.topbar{height:42px}.top-right .metric{display:none}.layout{display:flex;flex-direction:column;padding:7px;min-height:0}.chart-panel{height:410px;min-height:410px}.chart-wrap{min-height:0;flex:1}.chart-footer{font-size:8px}.chart-footer span:first-child{max-width:65%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sidebar{display:grid;grid-template-columns:1fr}.side-panel{padding:10px}.stats{min-height:130px}.bottom-panel{height:250px}.chart-head{padding:0 8px}.timeframes{gap:0}.timeframes button{padding:5px 4px;font-size:9px}.pair{gap:5px;font-size:10px}.pair .logo{width:19px;height:19px;flex-basis:19px}.pair .logo svg{width:19px;height:19px}.chart-tools{height:29px}.mobile-stats{display:flex;gap:15px;padding:7px 10px;border-bottom:1px solid var(--line);overflow:auto}.mobile-stats span{white-space:nowrap;color:#777;font-size:9px}.mobile-stats b{color:#ddd;margin-left:4px;font-size:10px}}
+@media(max-width:380px){.chart-head{gap:3px}.timeframes button{padding:5px 3px;font-size:8px}.pair-sub{display:none}.chart-tools span:last-child{font-size:8px}.stats-grid{gap:6px}.stat{padding:7px}}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="top-left"><div class="brand"><div class="logo"><svg viewBox="0 0 397 311" xmlns="http://www.w3.org/2000/svg" aria-label="Solana"><path fill="currentColor" d="M64.5 0h313.2c12.4 0 18.6 15 9.8 23.8l-55.4 55.4c-2.6 2.6-6.1 4.1-9.8 4.1H9.1C-3.3 83.3-9.5 68.3-.7 59.5L54.7 4.1C57.3 1.5 60.8 0 64.5 0Zm0 227.7h313.2c12.4 0 18.6 15 9.8 23.8l-55.4 55.4c-2.6 2.6-6.1 4.1-9.8 4.1H9.1c-12.4 0-18.6-15-9.8-23.8l55.4-55.4c2.6-2.6 6.1-4.1 9.8-4.1Zm267.8-113.8H19.1c-12.4 0-18.6 15-9.8 23.8l55.4 55.4c2.6 2.6 6.1 4.1 9.8 4.1h313.2c12.4 0 18.6-15 9.8-23.8l-55.4-55.4c-2.6-2.6-6.1-4.1-9.8-4.1Z"/></svg></div><span>Trade<span style="color:var(--green)">desk</span></span></div><nav class="nav"><span>Trading</span><span>Portfolio</span><span>Track</span><span>Rewards</span><span>Trenches</span></nav></div><div class="top-right"><div class="metric"><small>Wallet</small><b>◎ 12.48 SOL</b></div><div class="metric"><small>Network</small><b class="green">● Solana</b></div><div class="metric"><small>24h PnL</small><b class="green">+$284.62</b></div></div></header>
+<main class="layout">
+<section class="chart-panel"><div class="chart-head"><div class="pair"><div class="logo"><svg viewBox="0 0 397 311" xmlns="http://www.w3.org/2000/svg" aria-label="Solana"><path fill="currentColor" d="M64.5 0h313.2c12.4 0 18.6 15 9.8 23.8l-55.4 55.4c-2.6 2.6-6.1 4.1-9.8 4.1H9.1C-3.3 83.3-9.5 68.3-.7 59.5L54.7 4.1C57.3 1.5 60.8 0 64.5 0Zm0 227.7h313.2c12.4 0 18.6 15 9.8 23.8l-55.4 55.4c-2.6 2.6-6.1 4.1-9.8 4.1H9.1c-12.4 0-18.6-15-9.8-23.8l55.4-55.4c2.6-2.6 6.1-4.1 9.8-4.1Zm267.8-113.8H19.1c-12.4 0-18.6 15-9.8 23.8l55.4 55.4c2.6 2.6 6.1 4.1 9.8 4.1h313.2c12.4 0 18.6-15 9.8-23.8l-55.4-55.4c-2.6-2.6-6.1-4.1-9.8-4.1Z"/></svg></div><div>CHILLHOUSE <span class="pair-sub">/ SOL</span></div><span class="pill">LIVE</span></div><div class="timeframes" id="timeframes"><button class="active">1m</button><button>5m</button><button>15m</button><button>1h</button><button>4h</button><button>1D</button></div></div>
+<div class="mobile-stats"><span>PRICE <b>$0.00482</b></span><span>MCAP <b>$4.82M</b></span><span>LIQ <b>$318K</b></span></div>
+<div class="chart-tools"><button class="toolbtn">⌖</button><button class="toolbtn">＋</button><button class="toolbtn">−</button><button class="toolbtn">↗</button><span class="spacer"></span><span>O 0.00471&nbsp; H 0.00491&nbsp; L 0.00466&nbsp; C <b class="green">0.00482</b></span></div>
+<div class="chart-wrap"><canvas id="chart"></canvas></div><div class="chart-footer"><span>TradingView-style demo chart · CHILLHOUSE / SOL</span><span>UTC&nbsp; 14:32:08</span></div></section>
+<aside class="sidebar"><section class="side-panel"><div class="balance"><div><span>Available balance</span><br><strong>12.48 <small style="font-size:10px;color:#888">SOL</small></strong></div><span>◎ Wallet 1　⌄</span></div><div class="buy-tabs" id="buyTabs"><button class="active buy" data-mode="buy">Buy</button><button data-mode="sell">Sell</button></div><div class="field-label"><label for="amount">Amount</label><span>Balance: 12.48 SOL</span></div><div class="amount"><input id="amount" type="number" min="0" step="0.01" value="1.00"><span>SOL</span></div><div class="quick"><button data-amount="0.1">0.1</button><button data-amount="0.5">0.5</button><button data-amount="1">1</button><button data-amount="2">2</button></div><div class="field-label"><span>Slippage</span><span>Priority fee</span></div><div class="quick"><button>Auto</button><button>0.5%</button><button>1%</button><button>1.5%</button></div><button class="buy-action" id="tradeAction">Buy CHILLHOUSE</button><div class="hint">Estimated price impact: <span class="green">0.12%</span></div></section>
+<section class="side-panel stats"><h3>Position overview</h3><div class="stats-grid"><div class="stat"><small>Invested</small><b><svg class="sol-icon" viewBox="0 0 397 311" aria-hidden="true"><path fill="currentColor" d="M64.5 0h313.2c12.4 0 18.6 15 9.8 23.8l-55.4 55.4c-2.6 2.6-6.1 4.1-9.8 4.1H9.1C-3.3 83.3-9.5 68.3-.7 59.5L54.7 4.1C57.3 1.5 60.8 0 64.5 0Zm0 227.7h313.2c12.4 0 18.6 15 9.8 23.8l-55.4 55.4c-2.6 2.6-6.1 4.1-9.8 4.1H9.1c-12.4 0-18.6-15-9.8-23.8l55.4-55.4c2.6-2.6 6.1-4.1 9.8-4.1Zm267.8-113.8H19.1c-12.4 0-18.6 15-9.8 23.8l55.4 55.4c2.6 2.6 6.1 4.1 9.8 4.1h313.2c12.4 0 18.6-15 9.8-23.8l-55.4-55.4c-2.6-2.6-6.1-4.1-9.8-4.1Z"/></svg>4.20</b></div><div class="stat"><small>Sold</small><b><svg class="sol-icon" viewBox="0 0 397 311" aria-hidden="true"><path fill="currentColor" d="M64.5 0h313.2c12.4 0 18.6 15 9.8 23.8l-55.4 55.4c-2.6 2.6-6.1 4.1-9.8 4.1H9.1C-3.3 83.3-9.5 68.3-.7 59.5L54.7 4.1C57.3 1.5 60.8 0 64.5 0Zm0 227.7h313.2c12.4 0 18.6 15 9.8 23.8l-55.4 55.4c-2.6 2.6-6.1 4.1-9.8 4.1H9.1c-12.4 0-18.6-15-9.8-23.8l55.4-55.4c2.6-2.6 6.1-4.1 9.8-4.1Zm267.8-113.8H19.1c-12.4 0-18.6 15-9.8 23.8l55.4 55.4c2.6 2.6 6.1 4.1 9.8 4.1h313.2c12.4 0 18.6-15 9.8-23.8l-55.4-55.4c-2.6-2.6-6.1-4.1-9.8-4.1Z"/></svg>1.65</b></div><div class="stat"><small>Remaining</small><b><svg class="sol-icon" viewBox="0 0 397 311" aria-hidden="true"><path fill="currentColor" d="M64.5 0h313.2c12.4 0 18.6 15 9.8 23.8l-55.4 55.4c-2.6 2.6-6.1 4.1-9.8 4.1H9.1C-3.3 83.3-9.5 68.3-.7 59.5L54.7 4.1C57.3 1.5 60.8 0 64.5 0Zm0 227.7h313.2c12.4 0 18.6 15 9.8 23.8l-55.4 55.4c-2.6 2.6-6.1 4.1-9.8 4.1H9.1c-12.4 0-18.6-15-9.8-23.8l55.4-55.4c2.6-2.6 6.1-4.1 9.8-4.1Zm267.8-113.8H19.1c-12.4 0-18.6 15-9.8 23.8l55.4 55.4c2.6 2.6 6.1 4.1 9.8 4.1h313.2c12.4 0 18.6-15 9.8-23.8l-55.4-55.4c-2.6-2.6-6.1-4.1-9.8-4.1Z"/></svg>2.55</b></div><div class="stat"><small>Total PnL</small><b class="green">+$186.42</b></div></div></section></aside>
+<section class="bottom-panel"><div class="bottom-head" id="bottomTabs"><button class="active" data-tab="Trades">Trades <span style="color:#777">(28)</span></button><button data-tab="Positions">Positions</button><button data-tab="Orders">Orders <span style="color:#777">(0)</span></button><button data-tab="Holders">Holders</button></div><div class="table-wrap" id="tableContent"><table><thead><tr><th>AGE</th><th>TYPE</th><th>MCAP</th><th>AMOUNT</th><th>USD</th><th>SOL</th><th>MAKER</th></tr></thead><tbody id="tradeRows"></tbody></table></div></section>
+</main>
+<script>
+const canvas=document.getElementById('chart'),ctx=canvas.getContext('2d');
+let candles=[];let price=0.0037;for(let i=0;i<42;i++){let open=price;let drift=(Math.random()-.46)*.00034;let close=Math.max(.0028,open+drift);let high=Math.max(open,close)+Math.random()*.00013;let low=Math.min(open,close)-Math.random()*.00013;candles.push({open,close,high,low,vol:20+Math.random()*90});price=close;}
+// Give the right edge a small pullback and recovery, like an active low-cap chart.
+candles[35].close*=.94;candles[36].open=candles[35].close;candles[36].close*=.96;candles[37].open=candles[36].close;candles[37].close*=.98;candles[38].open=candles[37].close;candles[38].close*=1.025;candles[39].open=candles[38].close;candles[39].close*=1.018;candles[40].open=candles[39].close;candles[40].close*=.995;candles[41].open=candles[40].close;candles[41].close*=1.012;
+function draw(){
+ const dpr=Math.min(window.devicePixelRatio||1,2),r=canvas.getBoundingClientRect();
+ if(!r.width||!r.height)return;
+ canvas.width=Math.round(r.width*dpr);canvas.height=Math.round(r.height*dpr);
+ ctx.setTransform(dpr,0,0,dpr,0,0);
+ const w=r.width,h=r.height,narrow=w<480;
+ ctx.clearRect(0,0,w,h);
+ const left=8,right=narrow?48:62,top=12,bottom=narrow?23:27;
+ const cw=Math.max(10,w-left-right),ch=Math.max(30,h-top-bottom);
+ const volH=Math.min(narrow?38:48,ch*.2),chartH=Math.max(24,ch-volH-8);
+ let min=Math.min(...candles.map(c=>c.low)),max=Math.max(...candles.map(c=>c.high));
+ const pad=(max-min)*.13||.00001;min-=pad;max+=pad;
+ const y=v=>top+(max-v)/(max-min)*chartH;
+ ctx.font=(narrow?'8px':'9px')+' system-ui';ctx.strokeStyle='#202020';ctx.lineWidth=1;
+ for(let i=0;i<=5;i++){
+  const yy=top+i*chartH/5;ctx.beginPath();ctx.moveTo(left,yy);ctx.lineTo(w-right+1,yy);ctx.stroke();
+  const val=max-(max-min)*i/5;ctx.fillStyle='#777';ctx.fillText('$'+val.toFixed(5),w-right+5,yy+3);
+ }
+ const times=narrow?['14:00','14:10','14:20','14:30']:['14:00','14:06','14:12','14:18','14:24','14:30'];
+ for(let i=0;i<times.length;i++){
+  const xx=left+i*cw/(times.length-1);ctx.beginPath();ctx.moveTo(xx,top);ctx.lineTo(xx,top+chartH+volH+5);ctx.stroke();
+  ctx.fillStyle='#666';ctx.textAlign=i===0?'left':i===times.length-1?'right':'center';ctx.fillText(times[i],xx,h-7);
+ }
+ ctx.textAlign='left';
+ const gap=cw/candles.length,bw=Math.max(1.5,Math.min(narrow?5:8,gap*.64));
+ candles.forEach((c,i)=>{
+  const x=left+i*gap+gap/2,up=c.close>=c.open,col=up?'#7dffb3':'#ff6b6b';
+  ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,y(c.high));ctx.lineTo(x,y(c.low));ctx.stroke();
+  const yy=y(Math.max(c.open,c.close)),hh=Math.max(1,Math.abs(y(c.open)-y(c.close)));ctx.fillRect(x-bw/2,yy,bw,hh);
+  const vh=c.vol/120*volH;ctx.globalAlpha=.42;ctx.fillRect(x-bw/2,top+chartH+8+volH-vh,bw,vh);ctx.globalAlpha=1;
+ });
+ const last=candles[candles.length-1].close,ly=y(last);
+ ctx.setLineDash([3,3]);ctx.strokeStyle='#7dffb3';ctx.beginPath();ctx.moveTo(left,ly);ctx.lineTo(w-right+1,ly);ctx.stroke();ctx.setLineDash([]);
+ ctx.fillStyle='#7dffb3';ctx.fillRect(w-right+3,Math.max(top,Math.min(top+chartH-16,ly-8)),right-5,16);
+ ctx.fillStyle='#07130d';ctx.font=(narrow?'7px':'8px')+' system-ui';ctx.fillText('$'+last.toFixed(5),w-right+5,Math.max(top+10,Math.min(top+chartH-5,ly+3)));
+}
+const chartObserver=new ResizeObserver(draw);chartObserver.observe(document.querySelector(".chart-wrap"));window.addEventListener("orientationchange",()=>setTimeout(draw,120));window.addEventListener("resize",draw);draw();
+document.getElementById('timeframes').addEventListener('click',e=>{if(e.target.tagName!=='BUTTON')return;document.querySelectorAll('#timeframes button').forEach(b=>b.classList.toggle('active',b===e.target));});
+let mode='buy';document.getElementById('buyTabs').addEventListener('click',e=>{let b=e.target.closest('button');if(!b)return;mode=b.dataset.mode;document.querySelectorAll('#buyTabs button').forEach(x=>x.classList.toggle('active',x===b));let action=document.getElementById('tradeAction');action.textContent=(mode==='buy'?'Buy':'Sell')+' CHILLHOUSE';action.classList.toggle('sell-action',mode==='sell');});
+document.querySelectorAll('[data-amount]').forEach(b=>b.addEventListener('click',()=>document.getElementById('amount').value=b.dataset.amount));document.getElementById('tradeAction').addEventListener('click',()=>{let n=Number(document.getElementById('amount').value);if(!n||n<=0){alert('Enter a valid SOL amount.');return;}alert(`Demo only — ${mode.toUpperCase()} order for ${n} SOL. No transaction was sent.`)});
+const trades=[['2s','Buy','$4.82M','128.4K','$619.00','◎ 2.55','7xKp...9Qm'],['8s','Sell','$4.79M','42.1K','$202.00','◎ 0.83','A3fD...pL2'],['14s','Buy','$4.76M','86.0K','$410.00','◎ 1.69','9vRt...2Ws'],['21s','Buy','$4.71M','31.5K','$148.00','◎ 0.61','4mQa...8Hz'],['34s','Sell','$4.68M','105.0K','$491.00','◎ 2.03','B8nL...kP4'],['48s','Buy','$4.73M','214.2K','$1,014','◎ 4.18','6cTy...3Fa'],['1m','Sell','$4.69M','67.8K','$318.00','◎ 1.31','2pWx...7Jd'],['2m','Buy','$4.55M','52.0K','$237.00','◎ 0.98','H5rM...1Vc'],['3m','Buy','$4.42M','190.5K','$842.00','◎ 3.48','D1qN...6Ks'],['4m','Sell','$4.38M','23.4K','$102.00','◎ 0.42','F7aB...4Le']];
+function showTable(tab){let root=document.getElementById('tableContent');if(tab==='Trades'){root.innerHTML='<table><thead><tr><th>AGE</th><th>TYPE</th><th>MCAP</th><th>AMOUNT</th><th>USD</th><th>SOL</th><th>MAKER</th></tr></thead><tbody id="tradeRows"></tbody></table>';let body=document.getElementById('tradeRows');trades.forEach(t=>{let tr=document.createElement('tr');tr.innerHTML=`<td>${t[0]}</td><td class="type ${t[1].toLowerCase()}">${t[1]}</td><td>${t[2]}</td><td>${t[3]}</td><td>${t[4]}</td><td>${t[5]}</td><td class="maker">${t[6]}</td>`;body.appendChild(tr)});}else{let data={Positions:'No open positions in this demo view.',Orders:'No pending orders.',Holders:'Holder distribution data is not connected in this demo.'};root.innerHTML=`<div class="empty">${data[tab]}</div>`;}}
+document.getElementById('bottomTabs').addEventListener('click',e=>{let b=e.target.closest('button');if(!b)return;document.querySelectorAll('#bottomTabs button').forEach(x=>x.classList.toggle('active',x===b));showTable(b.dataset.tab)});showTable('Trades');
+
+
+let tokenLoaded=false;
+async function loadToken(){
+  try{
+    const r=await fetch('/api/chart-status');
+    const j=await r.json();
+    if(j.symbol&&!tokenLoaded){
+      tokenLoaded=true;
+      const pair=document.querySelector('.pair div');
+      if(pair)pair.innerHTML=j.symbol+' <span class="pair-sub">/ SOL</span>';
+      if(j.name){
+        const brand=document.querySelector('.brand span');
+        if(brand)brand.textContent=j.name;
+      }
+    }
+  }catch{}
+}
+setInterval(loadToken,1500);
+
+let livePrice=0.00482;
+function tick(){
+  if(dumped)return;
+  const last=candles[candles.length-1];
+  const o=last.close;
+  const c=o*(1+(Math.random()-.48)*.008);
+  const h=Math.max(o,c)*(1+Math.random()*.004);
+  const l=Math.min(o,c)*(1-Math.random()*.004);
+  candles.push({open:o,close:c,high:h,low:l,vol:20+Math.random()*60});
+  if(candles.length>50)candles.shift();
+  draw();
+  const priceEl=document.querySelector('.chart-tools b');
+  if(priceEl)priceEl.textContent=c.toFixed(5);
+}
+setInterval(tick,2000);
+
+let dumped=false;
+async function poll(){
+  try{
+    const r=await fetch('/api/chart-status');
+    const j=await r.json();
+    if(j.dump&&!dumped){
+      dumped=true;
+      // Draw hard red candle
+      const last=candles[candles.length-1];
+      const o=last.close;
+      const c=o*0.12;
+      candles.push({open:o,close:c,high:o*1.02,low:c*0.85,vol:200});
+      draw();
+      // Update balance display
+      const balEl=document.querySelector('.balance strong');
+      if(balEl)balEl.innerHTML=(j.balance||9300).toFixed(2)+' <small style="font-size:10px;color:#888">SOL</small>';
+      // Update price line
+      const priceEl=document.querySelector('.chart-tools b');
+      if(priceEl)priceEl.textContent=c.toFixed(5);
+    }
+    if(j.symbol){
+      const pair=document.querySelector('.pair div');
+      if(pair)pair.innerHTML=j.symbol+' <span class="pair-sub">/ SOL</span>';
+    }
+  }catch{}
+  setTimeout(poll,800);
+}
+poll();
+</script>
+</body></html>
